@@ -38,7 +38,7 @@ from couchbase.cluster import Cluster, ClusterOptions
 from couchbase.auth import PasswordAuthenticator
 from couchbase.cluster import QueryOptions
 
-VERSION = "4.2.11-dgehri"
+VERSION = "4.2.12-dgehri"
 CACHE_VERSION = "5"
 
 HashAlgorithm = hashlib.md5
