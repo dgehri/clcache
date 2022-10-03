@@ -37,7 +37,7 @@ from pymemcache.serde import (python_memcache_serializer,
                               python_memcache_deserializer)
 
 
-VERSION = "4.2.12-dgehri"
+VERSION = "4.2.13-dgehri"
 CACHE_VERSION = "5"
 
 HashAlgorithm = hashlib.md5
@@ -145,6 +145,15 @@ BUILDDIR = normalizeDir(os.environ.get('CLCACHE_BUILDDIR'))
 if BUILDDIR is None or not os.path.exists(BUILDDIR):
     BUILDDIR = normalizeDir(os.getcwd())
 
+BUILDDIR_RESOLVED = None
+if BUILDDIR:
+    try:
+        resolved = normalizeDir(Path(BUILDDIR).resolve())
+        if resolved != BUILDDIR:
+            BUILDDIR_RESOLVED = resolved
+    except:
+        pass
+
 BASEDIR = normalizeDir(os.environ.get('CLCACHE_BASEDIR'))
 
 if BASEDIR is None or not os.path.exists(BASEDIR):
@@ -164,6 +173,15 @@ if BASEDIR is None or not os.path.exists(BASEDIR):
                     if os.path.exists(value):
                         BASEDIR = normalizeDir(value)
                     break
+
+BASEDIR_RESOLVED = None
+if BASEDIR:
+    try:
+        resolved = normalizeDir(Path(BASEDIR).resolve())
+        if resolved != BASEDIR:
+            BASEDIR_RESOLVED = resolved
+    except:
+        pass
 
 # Need to substitute BASEDIR and BUILDDIR in the following
 # - "^<some text w/o colons> <path>[^:]*:"
@@ -1372,18 +1390,19 @@ def expandDirPlaceholder(path):
 
 
 def collapseBaseDirToPlaceholder(path):
-    if BASEDIR is None:
-        return (path, False)
+    if BASEDIR and path.startswith(BASEDIR):
+        return (path.replace(BASEDIR, BASEDIR_REPLACEMENT, 1), True)
+    elif BASEDIR_RESOLVED and path.startswith(BASEDIR_RESOLVED):
+        return (path.replace(BASEDIR_RESOLVED, BASEDIR_REPLACEMENT, 1), True)
     else:
-        if path.startswith(BASEDIR):
-            return (path.replace(BASEDIR, BASEDIR_REPLACEMENT, 1), True)
-        else:
-            return (path, False)
+        return (path, False)
 
 
 def collapseBuildDirToPlaceholder(path):
     if path.startswith(BUILDDIR):
         return (path.replace(BUILDDIR, BUILDDIR_REPLACEMENT, 1), True)
+    elif BUILDDIR_RESOLVED and path.startswith(BUILDDIR_RESOLVED):
+        return (path.replace(BUILDDIR_RESOLVED, BUILDDIR_REPLACEMENT, 1), True)
     else:
         return (path, False)
 
