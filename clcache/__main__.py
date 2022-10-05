@@ -38,10 +38,12 @@ from couchbase.cluster import Cluster
 from couchbase.auth import PasswordAuthenticator
 from couchbase.options import UpsertOptions, GetAndTouchOptions, ClusterOptions
 from couchbase.transcoder import RawBinaryTranscoder
+import lz4.frame
 
-VERSION = "4.3.0-dgehri"
+VERSION = "4.3.1-dgehri"
 CACHE_VERSION = "5"
-COUCHBASE_EXPIRATION = timedelta(days=15)
+
+COUCHBASE_EXPIRATION = timedelta(days=3)
 
 HashAlgorithm = hashlib.md5
 
@@ -857,23 +859,10 @@ class CacheFileStrategy:
         stats.setNumCacheEntries(currentCompilerArtifactsCount)
 
 
-class CacheDummyLock:
-    def __enter__(self):
-        pass
-
-    def __exit__(self, typ, value, traceback):
-        pass
-
-
 class CacheCouchbaseStrategy:
-    def __init__(self, url, cacheDirectory=None):
-        self.fileStrategy = CacheFileStrategy(cacheDirectory=cacheDirectory)
-
-        self.lock = CacheDummyLock()
+    def __init__(self, url):
         self.local_cache = {}
-        self.localManifest = {}
         self.url = url
-
         self.connect(url)
 
     def connect(self, url):
@@ -912,26 +901,10 @@ class CacheCouchbaseStrategy:
     def __str__(self):
         return "Remote Couchbase {}".format(self.host)
 
-    @property
-    def statistics(self):
-        return self.fileStrategy.statistics
-
-    @property
-    def configuration(self):
-        return self.fileStrategy.configuration
-
-    @staticmethod
-    def lockFor(_):
-        return CacheDummyLock()
-
-    @staticmethod
-    def manifestLockFor(_):
-        return CacheDummyLock()
-
     def _fetchEntry(self, key):
         try:
             hasher = HashAlgorithm()
-            res = self.coll_objects.get_and_touch(key, timedelta(days=1))
+            res = self.coll_objects.get_and_touch(key, COUCHBASE_EXPIRATION)
             payload = res.content_as[dict]
             if not "chunk_count" in payload:
                 return None
@@ -948,15 +921,15 @@ class CacheCouchbaseStrategy:
                 obj_key = f"{key}-{i}"
                 res = self.coll_object_data.get_and_touch(
                     obj_key,
-                    timedelta(days=1),
+                    COUCHBASE_EXPIRATION,
                     GetAndTouchOptions(
                         transcoder=RawBinaryTranscoder(), timeout=timedelta(seconds=5)
                     ),
                 )
-                obj_data.append(res.value)
-                hasher.update(res.value)
+                obj_data.append(lz4.frame.decompress(res.value))
+                hasher.update(obj_data[-1])
 
-            if payload['md5'] != hasher.hexdigest():
+            if payload["md5"] != hasher.hexdigest():
                 return None
 
             payload["obj"] = b"".join(obj_data)
@@ -970,19 +943,13 @@ class CacheCouchbaseStrategy:
         local_cache = key in self.local_cache and self.local_cache[key] is not None
         return local_cache or self._fetchEntry(key) is not None
 
-    def getEntry(self, key):
+    def getEntryAsPayload(self, key):
         if key not in self.local_cache:
             self._fetchEntry(key)
         if self.local_cache[key] is None:
             return None
-        payload = self.local_cache[key]
 
-        printTraceStatement(
-            "{} remote cache hit for {} dumping into local cache".format(self, key)
-        )
-
-        self.fileStrategy.setEntryFromPayload(key, payload)
-        return self.fileStrategy.getEntry(key)
+        return self.local_cache[key]
 
     def setEntry(self, key, artifacts):
         assert artifacts.objectFilePath
@@ -998,21 +965,21 @@ class CacheCouchbaseStrategy:
                     sub_key = f"{key}-{i}"
                     res = self.coll_object_data.upsert(
                         sub_key,
-                        chunk,
+                        lz4.frame.compress(chunk),
                         UpsertOptions(transcoder=RawBinaryTranscoder()),
                     )
                     if not res.success:
                         return None
-                    self.coll_object_data.touch(sub_key, timedelta(days=1))
+                    self.coll_object_data.touch(sub_key, COUCHBASE_EXPIRATION)
 
                 payload = {
                     "stdout": artifacts.stdout,
                     "stderr": artifacts.stderr,
                     "chunk_count": i,
-                    "md5": hasher.hexdigest()
+                    "md5": hasher.hexdigest(),
                 }
                 self.coll_objects.upsert(key, payload)
-                self.coll_objects.touch(key, timedelta(days=1))
+                self.coll_objects.touch(key, COUCHBASE_EXPIRATION)
         except Exception:
             printTraceStatement(
                 "Could not set {} in Couchbase {}".format(key, self.url)
@@ -1024,7 +991,7 @@ class CacheCouchbaseStrategy:
             entries = [e._asdict() for e in manifest.entries()]
             json_object = {"entries": entries}
             self.coll_manifests.upsert(key, json_object)
-            self.coll_manifests.touch(key, timedelta(days=1))
+            self.coll_manifests.touch(key, COUCHBASE_EXPIRATION)
         except Exception:
             printTraceStatement(
                 "Could not set {} in Couchbase {}".format(key, self.url)
@@ -1032,7 +999,7 @@ class CacheCouchbaseStrategy:
 
     def getManifest(self, key):
         try:
-            res = self.coll_manifests.get_and_touch(key, timedelta(days=1))
+            res = self.coll_manifests.get_and_touch(key, COUCHBASE_EXPIRATION)
             return Manifest(
                 [
                     ManifestEntry(
@@ -1045,53 +1012,55 @@ class CacheCouchbaseStrategy:
             self.local_cache[key] = None
             return None
 
-    def clean(self, stats, maximumSize):
-        self.fileStrategy.clean(stats, maximumSize)
-
 
 class CacheFileWithCouchbaseFallbackStrategy:
     def __init__(self, url, cacheDirectory=None):
-        self.localCache = CacheFileStrategy(cacheDirectory=cacheDirectory)
-        self.remoteCache = CacheCouchbaseStrategy(url, cacheDirectory=cacheDirectory)
+        self.local_cache = CacheFileStrategy(cacheDirectory=cacheDirectory)
+        self.remote_cache = CacheCouchbaseStrategy(url)
 
     def __str__(self):
         return "CacheFileWithCouchbaseFallbackStrategy local({}) and remote({})".format(
-            self.localCache, self.remoteCache
+            self.local_cache, self.remote_cache
         )
 
     def hasEntry(self, key):
-        return self.localCache.hasEntry(key) or self.remoteCache.hasEntry(key)
+        return self.local_cache.hasEntry(key) or self.remote_cache.hasEntry(key)
 
     def getEntry(self, key):
-        if self.localCache.hasEntry(key):
+        if self.local_cache.hasEntry(key):
             printTraceStatement("Getting object {} from local cache".format(key))
-            return self.localCache.getEntry(key)
-        remote = self.remoteCache.getEntry(key)
-        if remote:
-            printTraceStatement("Getting object {} from remote cache".format(key))
-            return remote
+            return self.local_cache.getEntry(key)
+
+        payload = self.remote_cache.getEntryAsPayload(key)
+        if payload:
+            printTraceStatement(
+                "{} remote cache hit for {} dumping into local cache".format(self, key)
+            )
+            self.local_cache.setEntryFromPayload(key, payload)
+            return self.local_cache.getEntry(key)
+
         return None
 
     def setEntry(self, key, artifacts):
-        self.localCache.setEntry(key, artifacts)
-        self.remoteCache.setEntry(key, artifacts)
+        self.local_cache.setEntry(key, artifacts)
+        self.remote_cache.setEntry(key, artifacts)
 
     def setManifest(self, manifestHash, manifest):
-        with self.localCache.manifestLockFor(manifestHash):
-            self.localCache.setManifest(manifestHash, manifest)
-        self.remoteCache.setManifest(manifestHash, manifest)
+        with self.local_cache.manifestLockFor(manifestHash):
+            self.local_cache.setManifest(manifestHash, manifest)
+        self.remote_cache.setManifest(manifestHash, manifest)
 
     def getManifest(self, manifestHash):
-        local = self.localCache.getManifest(manifestHash)
+        local = self.local_cache.getManifest(manifestHash)
         if local:
             printTraceStatement(
                 "{} local manifest hit for {}".format(self, manifestHash)
             )
             return local
-        remote = self.remoteCache.getManifest(manifestHash)
+        remote = self.remote_cache.getManifest(manifestHash)
         if remote:
-            with self.localCache.manifestLockFor(manifestHash):
-                self.localCache.setManifest(manifestHash, remote)
+            with self.local_cache.manifestLockFor(manifestHash):
+                self.local_cache.setManifest(manifestHash, remote)
             printTraceStatement(
                 "{} remote manifest hit for {} writing into local cache".format(
                     self, manifestHash
@@ -1102,28 +1071,26 @@ class CacheFileWithCouchbaseFallbackStrategy:
 
     @property
     def statistics(self):
-        return self.localCache.statistics
+        return self.local_cache.statistics
 
     @property
     def configuration(self):
-        return self.localCache.configuration
+        return self.local_cache.configuration
 
-    @staticmethod
-    def lockFor(_):
-        return CacheDummyLock()
+    def lockFor(self):
+        return self.local_cache.lockFor()
 
-    @staticmethod
-    def manifestLockFor(_):
-        return CacheDummyLock()
+    def manifestLockFor(self, key):
+        return self.local_cache.manifestLockFor(key)
 
     @property  # type: ignore
     @contextlib.contextmanager
     def lock(self):
-        with self.remoteCache.lock, self.localCache.lock:
+        with self.local_cache.lock:
             yield
 
     def clean(self, stats, maximumSize):
-        self.localCache.clean(stats, maximumSize)
+        self.local_cache.clean(stats, maximumSize)
 
 
 class Cache:
