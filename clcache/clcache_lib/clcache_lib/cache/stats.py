@@ -1,6 +1,7 @@
 from .cache_lock import CacheLock
 from .util import PersistentJSONDict
 
+
 class Statistics:
     CALLS_WITH_INVALID_ARGUMENT = "CallsWithInvalidArgument"
     CALLS_WITHOUT_SOURCE_FILE = "CallsWithoutSourceFile"
@@ -9,7 +10,8 @@ class Statistics:
     CALLS_FOR_LINKING = "CallsForLinking"
     CALLS_FOR_EXTERNAL_DEBUG_INFO = "CallsForExternalDebugInfo"
     CALLS_FOR_PREPROCESSING = "CallsForPreprocessing"
-    CACHE_HITS = "CacheHits"
+    LOCAL_CACHE_HITS = "CacheHits"
+    REMOTE_CACHE_HITS = "RemoteCacheHits"
     CACHE_MISSES = "CacheMisses"
     EVICTED_MISSES = "EvictedMisses"
     HEADER_CHANGED_MISSES = "HeaderChangedMisses"
@@ -25,7 +27,8 @@ class Statistics:
         CALLS_FOR_LINKING,
         CALLS_FOR_EXTERNAL_DEBUG_INFO,
         CALLS_FOR_PREPROCESSING,
-        CACHE_HITS,
+        LOCAL_CACHE_HITS,
+        REMOTE_CACHE_HITS,
         CACHE_MISSES,
         EVICTED_MISSES,
         HEADER_CHANGED_MISSES,
@@ -132,11 +135,17 @@ class Statistics:
     def setCacheSize(self, size):
         self._stats[Statistics.CACHE_SIZE] = size
 
-    def numCacheHits(self):
-        return self._stats[Statistics.CACHE_HITS]
+    def numLocalCacheHits(self):
+        return self._stats[Statistics.LOCAL_CACHE_HITS]
 
-    def registerCacheHit(self):
-        self._stats[Statistics.CACHE_HITS] += 1
+    def numRemoteCacheHits(self):
+        return self._stats[Statistics.REMOTE_CACHE_HITS]
+
+    def registerCacheHit(self, is_local=True):
+        if is_local:
+            self._stats[Statistics.LOCAL_CACHE_HITS] += 1
+        else:
+            self._stats[Statistics.REMOTE_CACHE_HITS] += 1
 
     def numCacheMisses(self):
         return self._stats[Statistics.CACHE_MISSES]
@@ -158,13 +167,14 @@ class Statistics:
 def printStatistics(cache):
     template = """
 clcache statistics:
-  current cache dir         : {}
-  cache size                : {:,} bytes
-  maximum cache size        : {:,} bytes
-  cache entries             : {}
-  cache hits                : {}
+  current cache dir            : {}
+  cache size                   : {:,} bytes
+  maximum cache size           : {:,} bytes
+  cache entries                : {}
+  cache hits (total)           : {} ({:.0f}%)
+  cache hits (remote)          : {} ({:.0f}%)
   cache misses
-    total                      : {}
+    total                      : {} ({:.0f}%)
     evicted                    : {}
     header changed             : {}
     source changed             : {}
@@ -178,14 +188,21 @@ clcache statistics:
     called w/ PCH              : {}""".strip()
 
     with cache.statistics.lock, cache.statistics as stats, cache.configuration as cfg:
+        total_cache_hits = stats.numLocalCacheHits() + stats.numRemoteCacheHits()
+        total_cache_access = total_cache_hits + stats.numCacheMisses()
+
         print(
             template.format(
                 str(cache),
                 stats.currentCacheSize(),
                 cfg.maximumCacheSize(),
                 stats.numCacheEntries(),
-                stats.numCacheHits(),
+                total_cache_hits,
+                float(100 * total_cache_hits) / float(total_cache_access) if total_cache_access != 0 else 0,
+                stats.numRemoteCacheHits(),
+                float(100 * stats.numRemoteCacheHits()) / float(total_cache_access) if total_cache_access != 0 else 0,
                 stats.numCacheMisses(),
+                float(100 * stats.numCacheMisses()) / float(total_cache_access) if total_cache_access != 0 else 0,
                 stats.numEvictedMisses(),
                 stats.numHeaderChangedMisses(),
                 stats.numSourceChangedMisses(),
@@ -203,4 +220,3 @@ clcache statistics:
 def resetStatistics(cache):
     with cache.statistics.lock, cache.statistics as stats:
         stats.resetCounters()
-

@@ -16,10 +16,10 @@ import sys
 import time
 from typing import Any, Iterator, List, Tuple
 
-from src.utils import *
-from src.cache import *
-from src.cl import *
-from src.config import VERSION
+from clcache_lib.utils import *
+from clcache_lib.cache import *
+from clcache_lib.cl import *
+from clcache_lib.config import VERSION
 
 # Returns pair:
 #   1. set of include filepaths
@@ -60,12 +60,12 @@ def parse_includes_set(compilerOutput, sourceFile, strip):
         return includesSet, compilerOutput
 
 
-def process_cache_hit(cache, obj_file, cache_key):
+def process_cache_hit(cache, is_local, obj_file, cache_key):
     trace(f"Reusing cached object for key {cache_key} for object file {obj_file}")
 
     with cache.lockFor(cache_key):
         with cache.statistics.lock, cache.statistics as stats:
-            stats.registerCacheHit()
+            stats.registerCacheHit(is_local)
 
         if os.path.exists(obj_file):
             success = False
@@ -268,8 +268,9 @@ def process(cache, objectFile, compiler, cmdLine, sourceFile):
 
                         manifestHit = True
                         with cache.lockFor(cachekey):
-                            if cache.hasEntry(cachekey):
-                                return process_cache_hit(cache, objectFile, cachekey)
+                            hit, is_local = cache.hasEntry(cachekey)
+                            if hit:
+                                return process_cache_hit(cache, is_local, objectFile, cachekey)
 
             unusableManifestMissReason = Statistics.registerHeaderChangedMiss
         else:
@@ -292,7 +293,7 @@ def process(cache, objectFile, compiler, cmdLine, sourceFile):
 
     with cache.manifestLockFor(manifestHash):
         if manifestHit is not None:
-            return ensure_artifactgs_exist(
+            return ensure_artifacts_exist(
                 cache, cachekey, unusableManifestMissReason, objectFile, compilerResult
             )
 
@@ -304,7 +305,7 @@ def process(cache, objectFile, compiler, cmdLine, sourceFile):
             manifest.addEntry(entry)
             cache.setManifest(manifestHash, manifest)
 
-        return ensure_artifactgs_exist(
+        return ensure_artifacts_exist(
             cache,
             cachekey,
             unusableManifestMissReason,
@@ -313,14 +314,15 @@ def process(cache, objectFile, compiler, cmdLine, sourceFile):
             addManifest,
         )
 
-def ensure_artifactgs_exist(
+def ensure_artifacts_exist(
     cache, cachekey, reason, objectFile, compilerResult, extraCallable=None
 ):
     cleanupRequired = False
     returnCode, compilerOutput, compilerStderr = compilerResult
     correctCompiliation = returnCode == 0 and os.path.exists(objectFile)
     with cache.lockFor(cachekey):
-        if not cache.hasEntry(cachekey):
+        hit, _ = cache.hasEntry(cachekey)
+        if not hit:
             with cache.statistics.lock, cache.statistics as stats:
                 reason(stats)
                 if correctCompiliation:

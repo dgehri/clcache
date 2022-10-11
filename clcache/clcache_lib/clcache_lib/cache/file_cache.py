@@ -7,7 +7,7 @@ import time
 from shutil import rmtree
 from atomicwrites import atomic_write
 
-from ..utils import *
+from ..utils.util import *
 from ..cl import CommandLineAnalyzer
 from .virt import *
 from .ex import *
@@ -251,7 +251,7 @@ class CompilerArtifactsSection:
         )
 
     def hasEntry(self, key):
-        return os.path.exists(self.cacheEntryDir(key))
+        return os.path.exists(self.cacheEntryDir(key)), True
 
     def setEntry(self, key, artifacts):
         cache_entry_dir = self.cacheEntryDir(key)
@@ -312,7 +312,8 @@ class CompilerArtifactsSection:
         return size
 
     def getEntry(self, key):
-        assert self.hasEntry(key)
+        hit, _ = self.hasEntry(key)
+        assert hit
         cache_entry_dir = self.cacheEntryDir(key)
         return CompilerArtifacts(
             os.path.join(cache_entry_dir, CompilerArtifactsSection.OBJECT_FILE),

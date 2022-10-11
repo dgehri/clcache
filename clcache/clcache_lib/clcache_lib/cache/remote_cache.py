@@ -20,7 +20,7 @@ from ..config import (
     COUCHBASE_CONNECT_TIMEOUT,
     COUCHBASE_GET_TIMEOUT,
 )
-from ..utils import trace
+from ..utils.util import trace
 
 HashAlgorithm = hashlib.md5
 
@@ -28,7 +28,7 @@ HashAlgorithm = hashlib.md5
 class CacheCouchbaseStrategy:
     def __init__(self, url):
         self.is_bad = False
-        self.local_cache = {}
+        self.cache = {}
         self.url = url
         self._cluster = None
         self._bucket = None
@@ -114,7 +114,7 @@ class CacheCouchbaseStrategy:
         try:
             return self._fetchEntryImpl(key)
         except Exception as e:
-            self.local_cache[key] = None
+            self.cache[key] = None
             return None
 
     def _fetchEntryImpl(self, key):
@@ -151,17 +151,17 @@ class CacheCouchbaseStrategy:
             return None
 
         payload["obj"] = b"".join(obj_data)
-        self.local_cache[key] = payload
+        self.cache[key] = payload
         return True
 
     def hasEntry(self, key):
-        local_cache = key in self.local_cache and self.local_cache[key] is not None
-        return local_cache or self._fetchEntry(key) is not None
+        in_cache = key in self.cache and self.cache[key] is not None
+        return in_cache or self._fetchEntry(key) is not None, False
 
     def getEntryAsPayload(self, key):
-        if key not in self.local_cache:
+        if key not in self.cache:
             self._fetchEntry(key)
-        return None if self.local_cache[key] is None else self.local_cache[key]
+        return None if self.cache[key] is None else self.cache[key]
 
     def setEntry(self, key, artifacts):
         if self.is_bad:
@@ -169,41 +169,45 @@ class CacheCouchbaseStrategy:
 
         assert artifacts.objectFilePath
         try:
-            hasher = HashAlgorithm()
-
             with open(artifacts.objectFilePath, "rb") as obj_file:
-                obj_data = lz4.frame.compress(obj_file.read())
-                obj_view = memoryview(obj_data)
-                hasher.update(obj_view)
-
-                CHUNK_LEN = 20 * 1024 * 1024
-                i = 0
-                total_len = len(obj_data)
-                while i * CHUNK_LEN < total_len:
-                    s = i * CHUNK_LEN
-                    e = s + CHUNK_LEN
-                    i += 1
-                    sub_key = f"{key}-{i}"
-                    res = self.coll_object_data.upsert(
-                        sub_key,
-                        obj_view[s:e],
-                        UpsertOptions(transcoder=RawBinaryTranscoderEx()),
-                    )
-                    if not res.success:
-                        return None
-                    self.coll_object_data.touch(sub_key, COUCHBASE_EXPIRATION)
-
-                payload = {
-                    "stdout": artifacts.stdout,
-                    "stderr": artifacts.stderr,
-                    "chunk_count": i,
-                    "md5": hasher.hexdigest(),
-                }
-                self.coll_objects.upsert(key, payload)
-                self.coll_objects.touch(key, COUCHBASE_EXPIRATION)
+                return self._setEntryFromFile(obj_file, key, artifacts)
         except Exception:
             trace(f"Could not set {key} in Couchbase {self.url}")
             return None
+
+    # TODO Rename this here and in `setEntry`
+    def _setEntryFromFile(self, obj_file, key, artifacts):
+        obj_data = lz4.frame.compress(obj_file.read())
+        obj_view = memoryview(obj_data)
+        hasher = HashAlgorithm()
+        hasher.update(obj_view)
+
+        CHUNK_LEN = 20 * 1024 * 1024
+        i = 0
+        total_len = len(obj_data)
+        while i * CHUNK_LEN < total_len:
+            s = i * CHUNK_LEN
+            e = s + CHUNK_LEN
+            i += 1
+            sub_key = f"{key}-{i}"
+            res = self.coll_object_data.upsert(
+                sub_key,
+                obj_view[s:e],
+                UpsertOptions(transcoder=RawBinaryTranscoderEx()),
+            )
+            if not res.success:
+                return None
+            self.coll_object_data.touch(sub_key, COUCHBASE_EXPIRATION)
+
+        payload = {
+            "stdout": artifacts.stdout,
+            "stderr": artifacts.stderr,
+            "chunk_count": i,
+            "md5": hasher.hexdigest(),
+        }
+        self.coll_objects.upsert(key, payload)
+        self.coll_objects.touch(key, COUCHBASE_EXPIRATION)
+        return len(obj_view)
 
     def setManifest(self, key, manifest):
         if self.is_bad:
@@ -232,7 +236,7 @@ class CacheCouchbaseStrategy:
                 ]
             )
         except Exception:
-            self.local_cache[key] = None
+            self.cache[key] = None
             return None
 
 
@@ -245,10 +249,12 @@ class CacheFileWithCouchbaseFallbackStrategy:
         return f"CacheFileWithCouchbaseFallbackStrategy local({self.local_cache}) and remote({self.remote_cache})"
 
     def hasEntry(self, key):
-        return self.local_cache.hasEntry(key) or self.remote_cache.hasEntry(key)
+        local_hit, _ = self.local_cache.hasEntry(key)
+        return (True, True) if local_hit else self.remote_cache.hasEntry(key)
 
     def getEntry(self, key):
-        if self.local_cache.hasEntry(key):
+        local_hit, _ = self.local_cache.hasEntry(key)
+        if local_hit:
             trace(f"Getting object {key} from local cache")
             return self.local_cache.getEntry(key)
 
@@ -260,8 +266,9 @@ class CacheFileWithCouchbaseFallbackStrategy:
         return None
 
     def setEntry(self, key, artifacts):
-        self.local_cache.setEntry(key, artifacts)
+        size = self.local_cache.setEntry(key, artifacts)
         self.remote_cache.setEntry(key, artifacts)
+        return size
 
     def setManifest(self, manifestHash, manifest):
         with self.local_cache.manifestLockFor(manifestHash):

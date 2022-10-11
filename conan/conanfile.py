@@ -2,14 +2,14 @@ from conans import ConanFile
 
 class ClcacheConan(ConanFile):
     name = "clcache"
-    version = "4.3.1"
+    version = "4.3.2"
     author = "Daniel Gehriger <dgehriger@globusmedical.com>"
     settings = "os", "arch"
     description = "A compiler cache for Microsoft Visual Studio"
     url = "https://github.com/dgehri/clcache"
     license = "https://github.com/dgehri/clcache/blob/master/LICENSE"
     user = "dgehri"
-    channel = "dev"
+    channel = "stable"
 
     def package(self):
         self.copy("*", dst="bin", src="../clcache.dist")
