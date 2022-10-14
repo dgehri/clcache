@@ -1,4 +1,5 @@
 from collections import namedtuple
+from email.mime import base
 import os
 import contextlib
 import json
@@ -245,11 +246,20 @@ class CompilerArtifactsSection:
     def cacheEntries(self):
         return child_dirs(self.compilerArtifactsSectionDir, absolute=False)
 
-    def cachedObjectName(self, key):
-        return os.path.join(
+    def cachedObjectNames(self, key):
+        paths = []
+
+        base_path = os.path.join(
             self.cacheEntryDir(key), CompilerArtifactsSection.OBJECT_FILE
         )
+        if os.path.exists(base_path):
+            paths.append(base_path)
 
+        if os.path.exists(f"{base_path}.lz4"):
+            paths.append(f"{base_path}.lz4")
+
+        return paths
+        
     def hasEntry(self, key):
         return os.path.exists(self.cacheEntryDir(key)), True
 
@@ -353,18 +363,21 @@ class CompilerArtifactsRepository:
         for section in self.sections():
             for cachekey in section.cacheEntries():
                 with contextlib.suppress(OSError):
-                    objectStat = os.stat(section.cachedObjectName(cachekey))
-                    objectInfos.append((objectStat, cachekey))
-        objectInfos.sort(key=lambda t: t[0].st_atime)
+                    if object_file_paths := section.cachedObjectNames(cachekey):
+                        object_stats = [os.stat(x) for x in object_file_paths]
+                        atime = min(x.st_atime for x in object_stats)
+                        size = sum(x.st_size for x in object_stats)
+                        objectInfos.append((atime, size, cachekey))
+        objectInfos.sort(key=lambda t: t[0])
 
         # compute real current size to fix up the stored cacheSize
-        currentSizeObjects = sum(x[0].st_size for x in objectInfos)
+        currentSizeObjects = sum(x[1] for x in objectInfos)
 
         removedItems = 0
-        for stat, cachekey in objectInfos:
+        for atime, size, cachekey in objectInfos:
             self.removeEntry(cachekey)
             removedItems += 1
-            currentSizeObjects -= stat.st_size
+            currentSizeObjects -= size
             if currentSizeObjects < maxCompilerArtifactsSize:
                 break
 
