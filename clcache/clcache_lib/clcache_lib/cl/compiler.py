@@ -2,6 +2,7 @@ import codecs
 import multiprocessing
 import os
 import re
+import sys
 import subprocess
 from collections import defaultdict
 from tempfile import TemporaryFile
