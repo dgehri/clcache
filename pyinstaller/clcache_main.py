@@ -1,3 +1,3 @@
-from clcache.__main__ import mainWrapper
+from clcache.__main__ import main_wrapper
 import clcache.storage 
-mainWrapper()
+main_wrapper()
