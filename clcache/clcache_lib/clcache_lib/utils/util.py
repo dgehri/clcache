@@ -136,9 +136,9 @@ def trace(msg: str, level=1) -> None:
     if logLevel >= level:
         scriptDir = os.path.realpath(os.path.dirname(sys.argv[0]))
         with OUTPUT_LOCK:
-            print(os.path.join(scriptDir, "clcache.py") + " " + msg)
+            print(os.path.join(scriptDir, "clcache.py") + " " + msg, flush=True)
 
 
 def error(message):
     with OUTPUT_LOCK:
-        print(message, file=sys.stderr)
+        print(message, file=sys.stderr, flush=True)

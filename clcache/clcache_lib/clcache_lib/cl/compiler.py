@@ -429,6 +429,8 @@ def invoke_real_compiler(
             stderrFile.seek(0)
             stderr = stderrFile.read()
     else:
+        sys.stdout.flush()
+        sys.stderr.flush()
         returnCode = subprocess.call(realCmdline, env=environment)
 
     trace("Real compiler returned code {0:d}".format(returnCode))
