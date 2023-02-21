@@ -2,6 +2,7 @@ from pathlib import Path
 import sys
 import threading
 import errno
+from typing import Union
 import lz4.frame
 import os
 from pathlib import Path
@@ -62,7 +63,8 @@ def child_dirs(path, absolute=True):
                 yield absPath if absolute else entry
 
 
-def normalize_dir(dir_path):
+# Normalize a directory path, removing trailing slashes.
+def normalize_dir(dir_path) -> Union[str, None]:
     if not dir_path:
         return None
     dir_path = os.path.normcase(os.path.abspath(os.path.normpath(dir_path)))
@@ -87,10 +89,15 @@ def my_executable_path():
 def find_compiler_binary():
     if "CLCACHE_CL" in os.environ:
         path = os.environ["CLCACHE_CL"]
+        
+        # If the path is not absolute, try to find it in the PATH
         if os.path.basename(path) == path:
             path = which(path)
-
-        return path if os.path.exists(path) else None
+            
+        if path is not None and os.path.exists(path):
+            return path
+        else:
+            return None
 
     frozen_by_py2_exe = hasattr(sys, "frozen")
 

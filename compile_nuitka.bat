@@ -10,7 +10,7 @@ python -m nuitka --standalone --plugin-enable=multiprocessing --plugin-enable=py
 pushd conan
 set CONAN_REVISIONS_ENABLED=1
 conan export-pkg conanfile.py --force
-conan upload clcache/* --all -r globus-external
+rem conan upload clcache/* --all -r globus-conan-local
 popd
 pause
 

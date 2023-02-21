@@ -1,4 +1,3 @@
-# String, by which BASE_DIR will be replaced in paths, stored in manifests.
 import contextlib
 import os
 from pathlib import Path
@@ -8,14 +7,21 @@ from ..config import CACHE_COMPILER_OUTPUT_STORAGE_CODEC
 from ..utils import normalize_dir, get_actual_filename
 from .ex import LogicException
 
+# String, by which BASE_DIR will be replaced in paths, stored in manifests.
 BASEDIR_REPLACEMENT = "<BASE_DIR>"
 BUILDDIR_REPLACEMENT = "<BUILD_DIR>"
 CONANDIR_REPLACEMENT = "<CONAN_USER_HOME>"
 
-BUILDDIR = normalize_dir(os.environ.get("CLCACHE_BUILDDIR"))
 
-if BUILDDIR is None or not os.path.exists(BUILDDIR):
-    BUILDDIR = normalize_dir(os.getcwd())
+def get_build_dir() -> str:
+    result = os.environ.get("CLCACHE_BUILDDIR")
+    if result is None or not os.path.exists(result):
+        result = os.getcwd()
+
+    return normalize_dir(result)  # type: ignore
+
+
+BUILDDIR = get_build_dir()
 
 BUILDDIR_RESOLVED = None
 if BUILDDIR:
@@ -61,7 +67,7 @@ def get_basedir_diag_regex(path):
 
 
 BASEDIR_DIAG_RE = (
-    get_basedir_diag_regex(re.sub(r"[\\\/]", r"[\\\\\/]", BASEDIR))
+    get_basedir_diag_regex(re.sub(r"[\\\/]", r"[\\\/]", BASEDIR))
     if BASEDIR is not None
     else None
 )
@@ -78,7 +84,8 @@ def get_builddir_diag_regex(path):
     return re.compile(regex, re.IGNORECASE | re.MULTILINE)
 
 
-BUILDDIR_DIAG_RE = get_builddir_diag_regex(re.sub(r"[\\\/]", r"[\\\\\/]", BUILDDIR))
+BUILDDIR_DIAG_RE = get_builddir_diag_regex(
+    re.sub(r"[\\\/]", r"[\\\/]", BUILDDIR))
 BUILDDIR_DIAG_RE_INV = get_builddir_diag_regex(re.escape(BUILDDIR_REPLACEMENT))
 BUILDDIR_ESC = BUILDDIR.replace("\\", "/")
 
@@ -88,9 +95,11 @@ def get_cached_compiler_console_output(path, translatePaths=False):
         with open(path, "rb") as f:
             output = f.read().decode(CACHE_COMPILER_OUTPUT_STORAGE_CODEC)
             if translatePaths:
-                output = BUILDDIR_DIAG_RE_INV.sub(rf"\1{BUILDDIR_ESC}\2", output)
+                output = BUILDDIR_DIAG_RE_INV.sub(
+                    rf"\1{BUILDDIR_ESC}\2", output)
                 if BASEDIR_DIAG_RE_INV is not None:
-                    output = BASEDIR_DIAG_RE_INV.sub(rf"\1{BASEDIR_ESC}\2", output)
+                    output = BASEDIR_DIAG_RE_INV.sub(
+                        rf"\1{BASEDIR_ESC}\2", output)
             return output
     except IOError:
         return ""
@@ -119,22 +128,22 @@ def expandDirPlaceholder(path):
         return path.replace(BASEDIR_REPLACEMENT, BASEDIR, 1)
     elif path.startswith(BUILDDIR_REPLACEMENT):
         return path.replace(BUILDDIR_REPLACEMENT, BUILDDIR, 1)
-    elif path.startswith(CONANDIR_REPLACEMENT):
+    elif path.startswith(CONANDIR_REPLACEMENT) and CONAN_USER_HOME:
         # This case is more complicated: if the path doesn't exist, we
         # need to inspect the package directory .conan_link files, which
         # will contain the correct path
-        # The result of the below will be: ['>', '.conan', 'data', '<package>', '<version>', '<user>', '<channel>', '<package>', '<hash>', ...]
+        # The result of the below will be: ['<CONAN_USER_HOME>', '.conan', 'data', '<package>', '<version>', '<user>', '<channel>', '<package>', '<hash>', ...]
         path_parts = os.path.normpath(path).split(os.path.sep)
         link_file = os.path.join(
             CONAN_USER_HOME, os.path.sep.join(path_parts[1:9]), ".conan_link"
         )
         if os.path.isfile(link_file):
             with open(link_file, "r") as f:
-                short_path = f.readline()
+                short_path = os.path.normpath(f.readline())
                 return os.path.join(short_path, os.path.sep.join(path_parts[9:]))
         else:
             return path.replace(CONANDIR_REPLACEMENT, CONAN_USER_HOME, 1)
-    elif path.startswith(QTDIR_REPLACEMENT) and QT_DIR is not None:
+    elif path.startswith(QTDIR_REPLACEMENT) and QT_DIR:
         return path.replace(QTDIR_REPLACEMENT, QT_DIR, 1)
     else:
         m = RE_ENV.match(path)
@@ -166,38 +175,64 @@ def collapseBuildDirToPlaceholder(path):
         return (path, False)
 
 
-def get_conan_user_home_short_re():
-    if conan_user_home_short := os.environ.get("CONAN_USER_HOME_SHORT"):
-        return re.sub(r"[\\\/]", r"[\\\\\/]", conan_user_home_short)
-    return r"[a-z]:[\\\/].conan"
+def get_conan_user_home_short_re(path=None):
+    if path is None:
+        path = os.environ.get("CONAN_USER_HOME_SHORT")
+    if path is None:
+        path = r"[a-z]:[\\\/].conan"
+    else:
+        path = path.replace('[', r'\[')
+        path = re.sub(r"[\\\/](?!\[)", r"[\\\/]", path)
+
+    return re.compile(rf"^({path}[\\\/][0-9a-f]+[\\\/]1(?=[\\\/]))", re.IGNORECASE)
 
 
-def get_conan_user_home():
-    conan_user_home = os.environ.get("CONAN_USER_HOME")
-    if conan_user_home is None:
-        conan_user_home = rf"{os.environ.get('USERPROFILE')}"
-    return os.path.normcase(os.path.abspath(conan_user_home)).rstrip("\\/")
+def get_conan_user_home(path=None):
+    if path is None:
+        path = os.environ.get("CONAN_USER_HOME")
+
+    if path is None:
+        path = rf"{os.environ.get('USERPROFILE')}"
+
+    return os.path.normcase(os.path.abspath(path)).rstrip("\\/")
 
 
-CONAN_USER_HOME = get_conan_user_home()
+def get_conan_user_home_re(path=None):
+    if path is not None:
+        return re.compile("^" + re.sub(r"[\\\/]", r"[\\\/]", get_conan_user_home(path)), re.IGNORECASE)
+    else:
+        return re.compile("^" + re.sub(r"[\\\/]", r"[\\\/]", get_conan_user_home(path)) + r"(?=[\\\/]\.conan)", re.IGNORECASE)
 
 
-def get_conan_user_home_re():
-    return "^" + re.sub(r"[\\\/]", r"[\\\\\/]", CONAN_USER_HOME) + r"(?=[\\\/]\.conan)"
-
-
-RE_CONAN_USER_HOME = re.compile(get_conan_user_home_re(), re.IGNORECASE)
-RE_CONAN_USER_SHORT = re.compile(
-    rf"^({get_conan_user_home_short_re()}[\\\/][0-9a-f]+[\\\/]1(?=[\\\/]))",
-    re.IGNORECASE,
-)
+CONAN_USER_HOME = None
+RE_CONAN_USER_HOME = None
+RE_CONAN_USER_SHORT = None
+CONAN_USER_HOME_FROM_VENV = None
+RE_CONAN_USER_HOME_VENV = re.compile(
+    r"^(.*[\\\/]gm-venv[\\\/]conan_[0-9a-f]+(?=[\\\/]))", re.IGNORECASE)
 
 
 def canonicalizeConanPath(conan_path: str):
+    # Check if the conan_path matches the CONAN_USER_HOME from a venv
+    global CONAN_USER_HOME_FROM_VENV, CONAN_USER_HOME, RE_CONAN_USER_HOME, RE_CONAN_USER_SHORT
+    if CONAN_USER_HOME_FROM_VENV is None:
+        m = RE_CONAN_USER_HOME_VENV.match(conan_path)
+        if m is not None:
+            CONAN_USER_HOME_FROM_VENV = m.group(1)
+            CONAN_USER_HOME = get_conan_user_home(CONAN_USER_HOME_FROM_VENV)
+            RE_CONAN_USER_HOME = get_conan_user_home_re(CONAN_USER_HOME)
+            RE_CONAN_USER_SHORT = get_conan_user_home_short_re(CONAN_USER_HOME)
+
+    if CONAN_USER_HOME is None:
+        CONAN_USER_HOME = get_conan_user_home()
+        RE_CONAN_USER_HOME = get_conan_user_home_re()
+        RE_CONAN_USER_SHORT = get_conan_user_home_short_re()
+
     # Check for Conan short folder (c:\.conan\)
     m = RE_CONAN_USER_SHORT.match(conan_path)
     if m is not None:
-        real_path_file = os.path.join(os.path.dirname(m.group(1)), "real_path.txt")
+        real_path_file = os.path.join(
+            os.path.dirname(m.group(1)), "real_path.txt")
         if os.path.isfile(real_path_file):
             with open(real_path_file, "r") as f:
                 # Transform to long form
@@ -211,9 +246,11 @@ def canonicalizeConanPath(conan_path: str):
     return (result, result is not conan_path)
 
 
+# Canonicalize Qt folder
 QT_DIR = None
 QTDIR_REPLACEMENT = "<QT_DIR>"
-RE_QT_DIR = re.compile(rf"^(.*[\\\/]Qt[\\\/]\d+\.\d+\.\d+(?=[\\\/]))", re.IGNORECASE)
+RE_QT_DIR = re.compile(
+    rf"^(.*[\\\/]Qt[\\\/]\d+\.\d+\.\d+(?=[\\\/]))", re.IGNORECASE)
 
 
 def canonicalizeQtPath(str: str):
@@ -275,7 +312,8 @@ def collapseDirPlaceholderInCompileOutput(compilerOutput: str, re: re.Pattern):
         line = line.rstrip("\r\n")
         match = re.match(line)
         if match is not None:
-            file_path = os.path.normcase(os.path.abspath(os.path.normpath(match[2])))
+            file_path = os.path.normcase(
+                os.path.abspath(os.path.normpath(match[2])))
             file_path = collapseDirToPlaceholder(file_path)
             line = re.sub(r"\1" + file_path.replace("\\", "\\\\"), line)
         lines.append(line)
@@ -304,7 +342,8 @@ def canonicalizeEnvPath(str: str):
     for e in env_vars:
         env_var = os.environ.get(e)
         if env_var is not None:
-            env_path = os.path.realpath(os.path.normpath(os.path.normcase(env_var)))
+            env_path = os.path.realpath(
+                os.path.normpath(os.path.normcase(env_var)))
             if real_path.startswith(env_path + os.path.sep):
                 return (real_path.replace(env_path, f"<env:{e}>"), True)
     return (str, False)
@@ -321,12 +360,12 @@ def getBaseDirSourceRegex():
     if BASEDIR is None:
         return None
 
-    baseDirRegex = re.sub(r"[\\\/]", r"[\\\\\/]", BASEDIR)
+    baseDirRegex = re.sub(r"[\\\/]", r"[\\\/]", BASEDIR)
 
     try:
         # The following may fail if BUILDDIR is on a different drive than BASEDIR
         buildPathRelRegex = re.sub(
-            r"[\\\/]", r"[\\\\\/]", os.path.relpath(BUILDDIR, BASEDIR)
+            r"[\\\/]", r"[\\\/]", os.path.relpath(BUILDDIR, BASEDIR)
         )
         fullRegex = rf'((?:^|\n)\s*(?:#\s*include\s+["<]|\/\/\s*)){baseDirRegex}(?![\\/]{buildPathRelRegex})'
         return re.compile(fullRegex.encode(), re.IGNORECASE)
