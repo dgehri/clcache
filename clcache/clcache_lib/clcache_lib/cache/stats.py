@@ -1,3 +1,5 @@
+import os
+import threading
 from .cache_lock import CacheLock
 from .util import PersistentJSONDict
 
@@ -39,20 +41,26 @@ class Statistics:
         CACHE_SIZE,
     }
 
-    def __init__(self, statsFile):
+    def __init__(self, statsFile: str):
+        """Constructor
+
+        Args:
+            statsFile (str): Path to the statistics file
+        """
         self._statsFile = statsFile
         self._stats = None
-        self.lock = CacheLock.forPath(self._statsFile)
+        self._mtime = None
+        self.lock = threading.Lock()
 
     def __enter__(self):
         self._stats = PersistentJSONDict(self._statsFile)
+            
         for k in Statistics.RESETTABLE_KEYS | Statistics.NON_RESETTABLE_KEYS:
             if k not in self._stats:
                 self._stats[k] = 0
         return self
 
     def __exit__(self, typ, value, traceback):
-        # Does not write to disc when unchanged
         self._stats.save()
 
     def __eq__(self, other):
@@ -198,11 +206,14 @@ clcache statistics:
                 cfg.maximumCacheSize(),
                 stats.numCacheEntries(),
                 total_cache_hits,
-                float(100 * total_cache_hits) / float(total_cache_access) if total_cache_access != 0 else 0,
+                float(100 * total_cache_hits) /
+                float(total_cache_access) if total_cache_access != 0 else 0,
                 stats.numRemoteCacheHits(),
-                float(100 * stats.numRemoteCacheHits()) / float(total_cache_access) if total_cache_access != 0 else 0,
+                float(100 * stats.numRemoteCacheHits()) /
+                float(total_cache_access) if total_cache_access != 0 else 0,
                 stats.numCacheMisses(),
-                float(100 * stats.numCacheMisses()) / float(total_cache_access) if total_cache_access != 0 else 0,
+                float(100 * stats.numCacheMisses()) /
+                float(total_cache_access) if total_cache_access != 0 else 0,
                 stats.numEvictedMisses(),
                 stats.numHeaderChangedMisses(),
                 stats.numSourceChangedMisses(),
