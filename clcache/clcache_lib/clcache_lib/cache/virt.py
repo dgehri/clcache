@@ -4,7 +4,7 @@ from pathlib import Path
 import re
 
 from ..config import CACHE_COMPILER_OUTPUT_STORAGE_CODEC
-from ..utils import normalize_dir, get_actual_filename
+from ..utils import normalize_dir, get_actual_filename, trace
 from .ex import LogicException
 
 # String, by which BASE_DIR will be replaced in paths, stored in manifests.
@@ -120,14 +120,17 @@ RE_ENV = re.compile(r"^<env:([^>]+)>", flags=re.IGNORECASE)
 
 
 def expandDirPlaceholder(path):
-    if path.startswith(BASEDIR_REPLACEMENT):
+    result = path
+    if value := expandDirPlaceholder.cache.get(path):
+        return value
+    elif path.startswith(BASEDIR_REPLACEMENT):
         if not BASEDIR:
             raise LogicException(
                 f"No CLCACHE_BASEDIR set, but found relative path {path}"
             )
-        return path.replace(BASEDIR_REPLACEMENT, BASEDIR, 1)
+        result = path.replace(BASEDIR_REPLACEMENT, BASEDIR, 1)
     elif path.startswith(BUILDDIR_REPLACEMENT):
-        return path.replace(BUILDDIR_REPLACEMENT, BUILDDIR, 1)
+        result = path.replace(BUILDDIR_REPLACEMENT, BUILDDIR, 1)
     elif path.startswith(CONANDIR_REPLACEMENT) and CONAN_USER_HOME:
         # This case is more complicated: if the path doesn't exist, we
         # need to inspect the package directory .conan_link files, which
@@ -140,11 +143,11 @@ def expandDirPlaceholder(path):
         if os.path.isfile(link_file):
             with open(link_file, "r") as f:
                 short_path = os.path.normpath(f.readline())
-                return os.path.join(short_path, os.path.sep.join(path_parts[9:]))
+                result = os.path.join(short_path, os.path.sep.join(path_parts[9:]))
         else:
-            return path.replace(CONANDIR_REPLACEMENT, CONAN_USER_HOME, 1)
+            result = path.replace(CONANDIR_REPLACEMENT, CONAN_USER_HOME, 1)
     elif path.startswith(QTDIR_REPLACEMENT) and QT_DIR:
-        return path.replace(QTDIR_REPLACEMENT, QT_DIR, 1)
+        result = path.replace(QTDIR_REPLACEMENT, QT_DIR, 1)
     else:
         m = RE_ENV.match(path)
         if m is not None:
@@ -153,8 +156,12 @@ def expandDirPlaceholder(path):
                 real_path = os.path.realpath(
                     os.path.normcase(os.path.normpath(env_val))
                 )
-                return RE_ENV.sub(real_path.replace("\\", "\\\\"), path)
-        return path
+                result = RE_ENV.sub(real_path.replace("\\", "\\\\"), path)
+                
+    expandDirPlaceholder.cache[path] = result
+    return result
+    
+expandDirPlaceholder.cache = {}
 
 
 def collapseBaseDirToPlaceholder(path):
@@ -265,25 +272,25 @@ def canonicalizeQtPath(str: str):
 
 
 def collapseDirToPlaceholder(path):
+    
+    if path in collapseDirToPlaceholder.cache:
+        return collapseDirToPlaceholder.cache[path]
+
     (path, done) = collapseBuildDirToPlaceholder(path)
-    if done:
-        return path
+    if not done:
+        (path, done) = collapseBaseDirToPlaceholder(path)
+    if not done:
+        (path, done) = canonicalizeConanPath(path)
+    if not done:
+        (path, done) = canonicalizeQtPath(path)
+    if not done:
+        (path, done) = canonicalizeEnvPath(path)
 
-    (path, done) = collapseBaseDirToPlaceholder(path)
-    if done:
-        return path
-
-    (path, done) = canonicalizeConanPath(path)
-    if done:
-        return path
-
-    (path, done) = canonicalizeQtPath(path)
-    if done:
-        return path
-
-    (path, done) = canonicalizeEnvPath(path)
+    collapseDirToPlaceholder.cache[path] = path
     return path
 
+
+collapseDirToPlaceholder.cache = {}
 
 RE_STDOUT = re.compile(r"^(\w+:\s[\s\w]+:\s+)(\S.*)$", re.IGNORECASE)
 RE_STDERR = re.compile(

@@ -70,14 +70,14 @@ def getFileHash(filePath, additionalData=None):
     with open(filePath, "rb") as inFile:
         hasher.update(substituteIncludeBaseDirPlaceholder(inFile.read()))
 
-    trace(f"File hash: {filePath} => {hasher.hexdigest()}", 2)
+    # trace(f"File hash: {filePath} => {hasher.hexdigest()}", 2)
 
     if additionalData is not None:
         # Encoding of this additional data does not really matter
         # as long as we keep it fixed, otherwise hashes change.
         # The string should fit into ASCII, so UTF8 should not change anything
         hasher.update(additionalData.encode("UTF-8"))
-        trace(f"AdditionalData Hash: {hasher.hexdigest()}: {additionalData}", 2)
+        # trace(f"AdditionalData Hash: {hasher.hexdigest()}: {additionalData}", 2)
 
     return hasher.hexdigest()
 
