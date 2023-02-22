@@ -1,6 +1,3 @@
-import os
-import threading
-from .cache_lock import CacheLock
 from .util import PersistentJSONDict
 
 
@@ -50,7 +47,6 @@ class Statistics:
         self._statsFile = statsFile
         self._stats = None
         self._mtime = None
-        self.lock = threading.Lock()
 
     def __enter__(self):
         self._stats = PersistentJSONDict(self._statsFile)

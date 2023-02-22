@@ -38,7 +38,8 @@ class Manifest:
     def touchEntry(self, objectHash):
         """Moves entry in entryIndex position to the top of entries()"""
         entryIndex = next(
-            (i for i, e in enumerate(self.entries()) if e.objectHash == objectHash), 0
+            (i for i, e in enumerate(self.entries())
+             if e.objectHash == objectHash), 0
         )
         self._entries.insert(0, self._entries.pop(entryIndex))
 
@@ -65,7 +66,8 @@ class ManifestSection:
 
     def setManifest(self, manifestHash, manifest):
         manifestPath = self.manifestPath(manifestHash)
-        trace(f"Writing manifest with manifestHash = {manifestHash} to {manifestPath}")
+        trace(
+            f"Writing manifest with manifestHash = {manifestHash} to {manifestPath}")
         ensure_dir_exists(self.manifestSectionDir)
 
         success = False
@@ -259,7 +261,7 @@ class CompilerArtifactsSection:
             paths.append(f"{base_path}.lz4")
 
         return paths
-        
+
     def hasEntry(self, key):
         return os.path.exists(self.cacheEntryDir(key)), True
 
@@ -281,7 +283,8 @@ class CompilerArtifactsSection:
         )
         if artifacts.stderr != "":
             set_cached_compiler_console_output(
-                os.path.join(temp_entry_dir, CompilerArtifactsSection.STDERR_FILE),
+                os.path.join(temp_entry_dir,
+                             CompilerArtifactsSection.STDERR_FILE),
                 artifacts.stderr,
                 True,
             )
@@ -307,13 +310,15 @@ class CompilerArtifactsSection:
 
         if "stdout" in payload:
             set_cached_compiler_console_output(
-                os.path.join(temp_entry_dir, CompilerArtifactsSection.STDOUT_FILE),
+                os.path.join(temp_entry_dir,
+                             CompilerArtifactsSection.STDOUT_FILE),
                 payload["stdout"],
             )
 
         if "stderr" in payload:
             set_cached_compiler_console_output(
-                os.path.join(temp_entry_dir, CompilerArtifactsSection.STDERR_FILE),
+                os.path.join(temp_entry_dir,
+                             CompilerArtifactsSection.STDERR_FILE),
                 payload["stderr"],
                 True,
             )
@@ -326,12 +331,15 @@ class CompilerArtifactsSection:
         assert hit
         cache_entry_dir = self.cacheEntryDir(key)
         return CompilerArtifacts(
-            os.path.join(cache_entry_dir, CompilerArtifactsSection.OBJECT_FILE),
+            os.path.join(cache_entry_dir,
+                         CompilerArtifactsSection.OBJECT_FILE),
             get_cached_compiler_console_output(
-                os.path.join(cache_entry_dir, CompilerArtifactsSection.STDOUT_FILE)
+                os.path.join(cache_entry_dir,
+                             CompilerArtifactsSection.STDOUT_FILE)
             ),
             get_cached_compiler_console_output(
-                os.path.join(cache_entry_dir, CompilerArtifactsSection.STDERR_FILE),
+                os.path.join(cache_entry_dir,
+                             CompilerArtifactsSection.STDERR_FILE),
                 True,
             ),
         )
@@ -453,7 +461,8 @@ class CacheFileStrategy:
             compilerArtifactsRootDir
         )
 
-        self.configuration = Configuration(os.path.join(self.dir, "config.txt"))
+        self.configuration = Configuration(
+            os.path.join(self.dir, "config.txt"))
         self.statistics = Statistics(os.path.join(self.dir, "stats.txt"))
 
     @property
@@ -461,7 +470,7 @@ class CacheFileStrategy:
     def lock(self):
         with allSectionsLocked(self.manifestRepository), allSectionsLocked(
             self.compilerArtifactsRepository
-        ), self.statistics.lock:
+        ):
             yield
 
     def lockFor(self, key):

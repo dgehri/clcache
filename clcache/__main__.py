@@ -64,7 +64,7 @@ def process_cache_hit(cache, is_local, obj_file, cache_key):
     trace(f"Reusing cached object for key {cache_key} for object file {obj_file}")
 
     with cache.lockFor(cache_key):
-        with cache.statistics.lock, cache.statistics as stats:
+        with cache.statistics as stats:
             stats.registerCacheHit(is_local)
 
         if os.path.exists(obj_file):
@@ -323,7 +323,7 @@ def ensure_artifacts_exist(
     with cache.lockFor(cachekey):
         hit, _ = cache.hasEntry(cachekey)
         if not hit:
-            with cache.statistics.lock, cache.statistics as stats:
+            with cache.statistics as stats:
                 reason(stats)
                 if correctCompiliation:
                     artifacts = CompilerArtifacts(
