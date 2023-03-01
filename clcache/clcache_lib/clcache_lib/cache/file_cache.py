@@ -1,11 +1,9 @@
-from collections import namedtuple
-from email.mime import base
 import os
 import contextlib
 import json
 import os
 import time
-from shutil import rmtree
+from typing import NamedTuple
 from atomicwrites import atomic_write
 
 from ..utils.util import *
@@ -13,17 +11,41 @@ from ..cl import CommandLineAnalyzer
 from .virt import *
 from .ex import *
 from .config import Configuration
-from .stats import Statistics
+from .stats import PersistentStats, Stats
 from .cache_lock import CacheLock
 from .hash import *
 
-CompilerArtifacts = namedtuple(
-    "CompilerArtifacts", ["objectFilePath", "stdout", "stderr"]
-)
+
+class CompilerArtifacts(NamedTuple):
+    '''
+    Represents a set of artifacts produced by a compiler invocation
+
+        - obj_file_path: path to the object file
+        - stdout: stdout of the compiler
+        - stderr: stderr of the compiler
+    '''
+    obj_file_path: Path
+    stdout: str
+    stderr: str
+
+
+class ManifestEntry(NamedTuple):
+    '''
+    An entry in a manifest file
+
+        - includeFiles: list of paths to include files, which this source file uses
+        - includesContentHash: hash of the contents of the include_files
+        - objectHash: hash of the object in cache
+    '''
+    includeFiles: List[str]
+    includesContentHash: str
+    objectHash: str
 
 
 class Manifest:
-    def __init__(self, entries=None):
+    '''Represents a manifest file'''
+
+    def __init__(self, entries: Optional[List[ManifestEntry]] = None):
         if entries is None:
             entries = []
         self._entries = entries.copy()
@@ -31,41 +53,32 @@ class Manifest:
     def entries(self):
         return self._entries
 
-    def addEntry(self, entry):
+    def add_entry(self, entry: ManifestEntry):
         """Adds entry at the top of the entries"""
         self._entries.insert(0, entry)
 
-    def touchEntry(self, objectHash):
-        """Moves entry in entryIndex position to the top of entries()"""
-        entryIndex = next(
+    def touch_entry(self, obj_hash: str):
+        """Moves entry in entry_index position to the top of entries()"""
+        entry_index = next(
             (i for i, e in enumerate(self.entries())
-             if e.objectHash == objectHash), 0
+             if e.objectHash == obj_hash), 0
         )
-        self._entries.insert(0, self._entries.pop(entryIndex))
-
-
-# ManifestEntry: an entry in a manifest file
-# `includeFiles`: list of paths to include files, which this source file uses
-# `includesContentsHash`: hash of the contents of the includeFiles
-# `objectHash`: hash of the object in cache
-ManifestEntry = namedtuple(
-    "ManifestEntry", ["includeFiles", "includesContentHash", "objectHash"]
-)
+        self._entries.insert(0, self._entries.pop(entry_index))
 
 
 class ManifestSection:
-    def __init__(self, manifestSectionDir):
-        self.manifestSectionDir = manifestSectionDir
-        self.lock = CacheLock.forPath(self.manifestSectionDir)
+    def __init__(self, manifestSectionDir: Path):
+        self.manifestSectionDir: Path = manifestSectionDir
+        self.lock = CacheLock.for_path(self.manifestSectionDir)
 
-    def manifestPath(self, manifestHash):
-        return os.path.join(self.manifestSectionDir, f"{manifestHash}.json")
+    def manifest_path(self, manifestHash: str) -> Path:
+        return self.manifestSectionDir / f"{manifestHash}.json"
 
-    def manifestFiles(self):
+    def manifest_files(self) -> Generator[Path, None, None]:
         return files_beneath(self.manifestSectionDir)
 
-    def setManifest(self, manifestHash, manifest):
-        manifestPath = self.manifestPath(manifestHash)
+    def set_manifest(self, manifestHash: str, manifest: Manifest):
+        manifestPath = self.manifest_path(manifestHash)
         trace(
             f"Writing manifest with manifestHash = {manifestHash} to {manifestPath}")
         ensure_dir_exists(self.manifestSectionDir)
@@ -90,30 +103,32 @@ class ManifestSection:
                 jsonobject = {"entries": entries}
                 json.dump(jsonobject, outFile, sort_keys=True, indent=2)
 
-    def getManifest(self, manifestHash):
-        file_name = self.manifestPath(manifestHash)
-        if not os.path.exists(file_name):
+    def get_manifest(self, manifestHash: str) -> Optional[Manifest]:
+        manifest_file = self.manifest_path(manifestHash)
+        if not manifest_file.exists():
             return None
         try:
-            with open(file_name, "r") as inFile:
+            with open(manifest_file, "r") as inFile:
                 doc = json.load(inFile)
                 return Manifest(
                     [
                         ManifestEntry(
-                            e["includeFiles"], e["includesContentHash"], e["objectHash"]
+                            e["includeFiles"],
+                            e["includesContentHash"],
+                            e["objectHash"]
                         )
                         for e in doc["entries"]
                     ]
                 )
         except IOError:
             return None
-        except ValueError:
-            error(f"clcache: manifest file {file_name} was broken")
+        except (ValueError, KeyError):
+            error(f"clcache: manifest file {manifest_file} was broken")
             return None
 
 
 @contextlib.contextmanager
-def allSectionsLocked(repository):
+def all_sections_locked(repository):
     sections = list(repository.sections())
     for section in sections:
         section.lock.acquire()
@@ -132,19 +147,28 @@ class ManifestRepository:
     # again due to a new manifest hash and is cleaned away after some time.
     MANIFEST_FILE_FORMAT_VERSION = 6
 
-    def __init__(self, manifestsRootDir):
-        self._manifestsRootDir = manifestsRootDir
+    def __init__(self, manifestsRootDir: Path):
+        self._manifestsRootDir: Path = manifestsRootDir
 
-    def section(self, manifestHash):
-        return ManifestSection(os.path.join(self._manifestsRootDir, manifestHash[:2]))
+    def section(self, manifestHash: str) -> ManifestSection:
+        return ManifestSection(self._manifestsRootDir / manifestHash[:2])
 
-    def sections(self):
+    def sections(self) -> Generator[ManifestSection, None, None]:
         return (ManifestSection(path) for path in child_dirs(self._manifestsRootDir))
 
-    def clean(self, maxManifestsSize):
+    def clean(self, maxManifestsSize: int) -> int:
+        '''
+        Removes old manifest files until the total size of the remaining manifest files is less than maxManifestsSize.
+
+        Parameters:
+            maxManifestsSize: The maximum size of the remaining manifest files in bytes.
+
+        Returns:
+            The total size of the remaining manifest files in bytes.
+        '''
         manifestFileInfos = []
         for section in self.sections():
-            for filePath in section.manifestFiles():
+            for filePath in section.manifest_files():
                 with contextlib.suppress(OSError):
                     manifestFileInfos.append((os.stat(filePath), filePath))
         manifestFileInfos.sort(key=lambda t: t[0].st_atime, reverse=True)
@@ -158,8 +182,11 @@ class ManifestRepository:
         return remainingObjectsSize
 
     @staticmethod
-    def getManifestHash(compilerBinary, commandLine, sourceFile):
-        compilerHash = getCompilerHash(compilerBinary)
+    def get_manifest_hash(compiler_path: Path, cmd_line: List[str], src_file: Path) -> str:
+        '''
+        Returns a hash of the manifest file that would be used for the given command line.
+        '''
+        compiler_hash = get_compiler_hash(compiler_path)
 
         # NOTE: We intentionally do not normalize command line to include
         # preprocessor options.  In direct mode we do not perform preprocessing
@@ -169,16 +196,16 @@ class ManifestRepository:
         # the compiler where to find the source files are parsed to replace
         # ocurrences of CLCACHE_BASEDIR and CLCACHE_BUILDDIR by a placeholder.
         (
-            arguments,
-            inputFiles,
-        ) = CommandLineAnalyzer.parseArgumentsAndInputFiles(commandLine)
+            args,
+            input_files,
+        ) = CommandLineAnalyzer.parse_args_and_input_files(cmd_line)
 
-        def collapseBasedirInCmdPath(path):
-            return collapseDirToPlaceholder(os.path.normcase(os.path.abspath(path)))
+        def canonicalize_path_arg(arg: Path):
+            return canonicalize_path(arg.absolute())
 
-        commandLine = []
-        argumentsWithPaths = ("AI", "I", "FU", "external:I", "imsvc")
-        argumentsToUnifyAndSort = (
+        cmd_line = []
+        args_with_paths = ("AI", "I", "FU", "external:I", "imsvc")
+        args_to_unify_and_sort = (
             "D",
             "MD",
             "MT",
@@ -201,105 +228,127 @@ class ManifestRepository:
             "nologo",
             "showIncludes",
         )
-        for k in sorted(arguments.keys()):
-            if k in argumentsWithPaths:
-                commandLine.extend(
-                    [f"/{k}{collapseBasedirInCmdPath(arg)}" for arg in arguments[k]]
+        for k in sorted(args.keys()):
+            if k in args_with_paths:
+                cmd_line.extend(
+                    [f"/{k}{canonicalize_path_arg(Path(arg))}" for arg in args[k]]
                 )
-            elif k in argumentsToUnifyAndSort:
-                commandLine.extend(
-                    [f"/{k}{arg}" for arg in list(dict.fromkeys(arguments[k]))]
+            elif k in args_to_unify_and_sort:
+                cmd_line.extend(
+                    [f"/{k}{arg}" for arg in list(dict.fromkeys(args[k]))]
                 )
             else:
-                commandLine.extend([f"/{k}{arg}" for arg in arguments[k]])
+                cmd_line.extend([f"/{k}{arg}" for arg in args[k]])
 
-        commandLine.extend(collapseBasedirInCmdPath(arg) for arg in inputFiles)
+        cmd_line.extend(canonicalize_path_arg(arg) for arg in input_files)
 
-        additionalData = "{}|{}|{}".format(
-            compilerHash, commandLine, ManifestRepository.MANIFEST_FILE_FORMAT_VERSION
+        toolset_data = "{}|{}|{}".format(
+            compiler_hash, cmd_line, ManifestRepository.MANIFEST_FILE_FORMAT_VERSION
         )
-        return getFileHash(sourceFile, additionalData)
+        return get_file_hash(src_file, toolset_data)
 
     @staticmethod
-    def getIncludesContentHashForFiles(includes):
+    def get_includes_content_hash_for_files(includes: List[Path]) -> str:
         try:
-            listOfHashes = getFileHashes(includes)
+            listOfHashes = get_file_hashes(includes)
         except FileNotFoundError as e:
             raise IncludeNotFoundException from e
-        return ManifestRepository.getIncludesContentHashForHashes(listOfHashes)
+        return ManifestRepository.get_includes_content_hash_for_hashes(listOfHashes)
 
     @staticmethod
-    def getIncludesContentHashForHashes(listOfHashes):
-        return HashAlgorithm(",".join(listOfHashes).encode()).hexdigest()
+    def get_includes_content_hash_for_hashes(hashes: List[str]) -> str:
+        return HashAlgorithm(",".join(hashes).encode()).hexdigest()
 
 
 class CompilerArtifactsSection:
-    OBJECT_FILE = "object"
-    STDOUT_FILE = "output.txt"
-    STDERR_FILE = "stderr.txt"
+    OBJECT_FILE: str = "object"
+    STDOUT_FILE: str = "output.txt"
+    STDERR_FILE: str = "stderr.txt"
 
-    def __init__(self, compilerArtifactsSectionDir):
-        self.compilerArtifactsSectionDir = compilerArtifactsSectionDir
-        self.lock = CacheLock.forPath(self.compilerArtifactsSectionDir)
+    def __init__(self, compiler_artifacts_section_dir: Path):
+        self.compilerArtifactsSectionDir: Path = compiler_artifacts_section_dir
+        self.lock = CacheLock.for_path(self.compilerArtifactsSectionDir)
 
-    def cacheEntryDir(self, key):
-        return os.path.join(self.compilerArtifactsSectionDir, key)
+    def cache_entry_dir(self, key: str) -> Path:
+        '''Returns the path to the cache entry directory for the given key.'''
+        return self.compilerArtifactsSectionDir / key
 
-    def cacheEntries(self):
-        return child_dirs(self.compilerArtifactsSectionDir, absolute=False)
+    def cache_entries(self) -> Generator[str, None, None]:
+        '''Returns a generator of cache entry keys.'''
+        return child_dirs_str(str(self.compilerArtifactsSectionDir), absolute=False)
 
-    def cachedObjectNames(self, key):
-        paths = []
+    def cached_objects(self, key: str) -> List[Path]:
+        '''Returns a list of paths to cached object files for the given key.'''
+        paths: List[Path] = []
 
-        base_path = os.path.join(
-            self.cacheEntryDir(key), CompilerArtifactsSection.OBJECT_FILE
-        )
-        if os.path.exists(base_path):
+        base_path = self.cache_entry_dir(
+            key) / CompilerArtifactsSection.OBJECT_FILE
+
+        if base_path.exists():
             paths.append(base_path)
 
-        if os.path.exists(f"{base_path}.lz4"):
-            paths.append(f"{base_path}.lz4")
+        compressed_path = base_path.parent / f"{base_path.name}.lz4"
+        if compressed_path.exists():
+            paths.append(compressed_path)
 
         return paths
 
-    def hasEntry(self, key):
-        return os.path.exists(self.cacheEntryDir(key)), True
+    def has_entry(self, key: str) -> Tuple[bool, bool]:
+        '''
+        Test if the cache entry for the given key exists.
 
-    def setEntry(self, key, artifacts):
-        cache_entry_dir = self.cacheEntryDir(key)
+        Returns:
+            A tuple of (has entry, is local cache entry).
+        '''
+        return self.cache_entry_dir(key).exists(), True
+
+    def set_entry(self, key: str, artifacts: CompilerArtifacts) -> int:
+        '''
+        Sets the cache entry for the given key to the given artifacts.
+
+        Returns:
+            The size of the cache entry in bytes.
+        '''
+        cache_entry_dir = self.cache_entry_dir(key)
         # Write new files to a temporary directory
-        temp_entry_dir = f"{cache_entry_dir}.new"
-        # Remove any possible left-over in tempEntryDir from previous executions
-        rmtree(temp_entry_dir, ignore_errors=True)
-        ensure_dir_exists(temp_entry_dir)
-        if artifacts.objectFilePath is not None:
-            dst_file_path = os.path.join(
-                temp_entry_dir, CompilerArtifactsSection.OBJECT_FILE
-            )
-            size = copy_or_link(artifacts.objectFilePath, dst_file_path, True)
+        temp_entry_dir: Path = cache_entry_dir.parent / \
+            f"{cache_entry_dir.name}.new"
+
+        remove_and_recreate_dir(temp_entry_dir)
+        size = 0
+        if artifacts.obj_file_path is not None:
+            dst_file_path = temp_entry_dir / CompilerArtifactsSection.OBJECT_FILE
+            size = copy_or_link(artifacts.obj_file_path, dst_file_path, True)
         set_cached_compiler_console_output(
-            os.path.join(temp_entry_dir, CompilerArtifactsSection.STDOUT_FILE),
+            temp_entry_dir / CompilerArtifactsSection.STDOUT_FILE,
             artifacts.stdout,
         )
         if artifacts.stderr != "":
-            set_cached_compiler_console_output(
-                os.path.join(temp_entry_dir,
-                             CompilerArtifactsSection.STDERR_FILE),
-                artifacts.stderr,
-                True,
-            )
+            set_cached_compiler_console_output(temp_entry_dir / CompilerArtifactsSection.STDERR_FILE,
+                                               artifacts.stderr,
+                                               True,
+                                               )
         # Replace the full cache entry atomically
         os.replace(temp_entry_dir, cache_entry_dir)
         return size
 
-    def setEntryFromPayload(self, key, payload):
-        cache_entry_dir = self.cacheEntryDir(key)
-        # Write new files to a temporary directory
-        temp_entry_dir = f"{cache_entry_dir}.new"
-        # Remove any possible left-over in tempEntryDir from previous executions
-        rmtree(temp_entry_dir, ignore_errors=True)
-        ensure_dir_exists(temp_entry_dir)
+    def set_entry_from_payload(self, key: str, payload: dict) -> int:
+        '''
+        Sets the cache entry for the given key to the given artifacts.
 
+        Parameters:
+            key: The key of the cache entry to set.
+            payload: A dictionary containing the artifacts to set.
+
+        Returns:
+            The size of the cache entry in bytes.
+        '''
+        cache_entry_dir = self.cache_entry_dir(key)
+        # Write new files to a temporary directory
+        temp_entry_dir = Path(f"{cache_entry_dir}.new")
+        remove_and_recreate_dir(temp_entry_dir)
+
+        size = 0
         if "obj" in payload:
             obj_path = os.path.join(
                 temp_entry_dir, f"{CompilerArtifactsSection.OBJECT_FILE}.lz4"
@@ -310,49 +359,42 @@ class CompilerArtifactsSection:
 
         if "stdout" in payload:
             set_cached_compiler_console_output(
-                os.path.join(temp_entry_dir,
-                             CompilerArtifactsSection.STDOUT_FILE),
+                temp_entry_dir / CompilerArtifactsSection.STDOUT_FILE,
                 payload["stdout"],
+                False
             )
 
         if "stderr" in payload:
             set_cached_compiler_console_output(
-                os.path.join(temp_entry_dir,
-                             CompilerArtifactsSection.STDERR_FILE),
+                temp_entry_dir / CompilerArtifactsSection.STDERR_FILE,
                 payload["stderr"],
-                True,
+                True
             )
         # Replace the full cache entry atomically
         os.replace(temp_entry_dir, cache_entry_dir)
         return size
 
-    def getEntry(self, key):
-        hit, _ = self.hasEntry(key)
+    def get_entry(self, key: str) -> CompilerArtifacts:
+        hit, _ = self.has_entry(key)
         assert hit
-        cache_entry_dir = self.cacheEntryDir(key)
+        cache_entry_dir = self.cache_entry_dir(key)
         return CompilerArtifacts(
-            os.path.join(cache_entry_dir,
-                         CompilerArtifactsSection.OBJECT_FILE),
+            cache_entry_dir / CompilerArtifactsSection.OBJECT_FILE,
             get_cached_compiler_console_output(
-                os.path.join(cache_entry_dir,
-                             CompilerArtifactsSection.STDOUT_FILE)
-            ),
+                cache_entry_dir / CompilerArtifactsSection.STDOUT_FILE),
             get_cached_compiler_console_output(
-                os.path.join(cache_entry_dir,
-                             CompilerArtifactsSection.STDERR_FILE),
-                True,
-            ),
+                cache_entry_dir / CompilerArtifactsSection.STDERR_FILE, True)
         )
 
 
 class CompilerArtifactsRepository:
-    def __init__(self, compilerArtifactsRootDir):
+    '''A repository for compiler artifacts.'''
+
+    def __init__(self, compilerArtifactsRootDir: Path):
         self._compilerArtifactsRootDir = compilerArtifactsRootDir
 
-    def section(self, key):
-        return CompilerArtifactsSection(
-            os.path.join(self._compilerArtifactsRootDir, key[:2])
-        )
+    def section(self, key: str):
+        return CompilerArtifactsSection(self._compilerArtifactsRootDir / key[:2])
 
     def sections(self):
         return (
@@ -361,178 +403,175 @@ class CompilerArtifactsRepository:
         )
 
     def removeEntry(self, keyToBeRemoved):
-        compilerArtifactsDir = self.section(keyToBeRemoved).cacheEntryDir(
+        compilerArtifactsDir = self.section(keyToBeRemoved).cache_entry_dir(
             keyToBeRemoved
         )
         rmtree(compilerArtifactsDir, ignore_errors=True)
 
-    def clean(self, maxCompilerArtifactsSize):
-        objectInfos = []
+    def clean(self, max_compiler_artifacts_size: int) -> Tuple[int, int]:
+        '''
+        Removes compiler artifacts until the total size of the artifacts is less than the given maximum size.
+
+        Parameters:
+            max_compiler_artifacts_size: The maximum size of the artifacts in bytes.
+
+        Returns:
+            A tuple of (number of artifacts removed, total size of artifacts in bytes).
+        '''
+        object_infos = []
         for section in self.sections():
-            for cachekey in section.cacheEntries():
+            for cachekey in section.cache_entries():
                 with contextlib.suppress(OSError):
-                    if object_file_paths := section.cachedObjectNames(cachekey):
+                    if object_file_paths := section.cached_objects(cachekey):
                         object_stats = [os.stat(x) for x in object_file_paths]
                         atime = min(x.st_atime for x in object_stats)
                         size = sum(x.st_size for x in object_stats)
-                        objectInfos.append((atime, size, cachekey))
-        objectInfos.sort(key=lambda t: t[0])
+                        object_infos.append((atime, size, cachekey))
+        object_infos.sort(key=lambda t: t[0])
 
         # compute real current size to fix up the stored cacheSize
-        currentSizeObjects = sum(x[1] for x in objectInfos)
+        current_size_objs = sum(x[1] for x in object_infos)
 
-        removedItems = 0
-        for atime, size, cachekey in objectInfos:
+        removed_items = 0
+        for atime, size, cachekey in object_infos:
             self.removeEntry(cachekey)
-            removedItems += 1
-            currentSizeObjects -= size
-            if currentSizeObjects < maxCompilerArtifactsSize:
+            removed_items += 1
+            current_size_objs -= size
+            if current_size_objs < max_compiler_artifacts_size:
                 break
 
-        return len(objectInfos) - removedItems, currentSizeObjects
+        return len(object_infos) - removed_items, current_size_objs
 
     @staticmethod
-    def compute_key(manifestHash, includesContentHash):
-        # We must take into account manifestHash to avoid
+    def compute_key(manifest_hash: str, includes_content_hash: str) -> str:
+        '''
+        Computes the key for the given manifest hash and includes content hash.
+
+        Parameters:
+            manifest_hash: The hash of the manifest.
+            includes_content_hash: The hash of the includes content.
+
+        Returns:
+            The key for the given manifest hash and includes content hash.
+        '''
+        # We must take into account manifest_hash to avoid
         # collisions when different source files use the same
         # set of includes.
-        return getStringHash(manifestHash + includesContentHash)
-
-    @staticmethod
-    def _normalizedCommandLine(cmdline):
-        trace("_normalizedCommandLine")
-        # Remove all arguments from the command line which only influence the
-        # preprocessor; the preprocessor's output is already included into the
-        # hash sum so we don't have to care about these switches in the
-        # command line as well.
-        argsToStrip = (
-            "AI",
-            "C",
-            "E",
-            "P",
-            "FI",
-            "u",
-            "X",
-            "FU",
-            "D",
-            "EP",
-            "Fx",
-            "U",
-            "I",
-            "external",
-            "imsvc",
-        )
-
-        # Also remove the switch for specifying the output file name; we don't
-        # want two invocations which are identical except for the output file
-        # name to be treated differently.
-        argsToStrip += ("Fo",)
-
-        # Also strip the switch for specifying the number of parallel compiler
-        # processes to use (when specifying multiple source files on the
-        # command line).
-        argsToStrip += ("MP",)
-
-        result = [
-            arg
-            for arg in cmdline
-            if not (arg[0] in "/-" and arg[1:].startswith(argsToStrip))
-        ]
-        trace(f"Arguments (normalized) '{result}'")
-        return result
+        return get_string_hash(manifest_hash + includes_content_hash)
 
 
 class CacheFileStrategy:
-    def __init__(self, cacheDirectory=None):
-        self.dir = cacheDirectory
+    def __init__(self, cache_dir: Optional[Path] = None):
+        self.dir = cache_dir
         if not self.dir:
             try:
-                self.dir = os.environ["CLCACHE_DIR"]
+                self.dir = Path(os.environ["CLCACHE_DIR"])
             except KeyError:
-                self.dir = os.path.join(os.path.expanduser("~"), "clcache")
+                self.dir = Path.home() / "clcache"
 
-        manifestsRootDir = os.path.join(self.dir, "manifests")
-        ensure_dir_exists(manifestsRootDir)
-        self.manifestRepository = ManifestRepository(manifestsRootDir)
+        manifests_root_dir = self.dir / "manifests"
+        ensure_dir_exists(manifests_root_dir)
+        self.manifests_repository = ManifestRepository(manifests_root_dir)
 
-        compilerArtifactsRootDir = os.path.join(self.dir, "objects")
-        ensure_dir_exists(compilerArtifactsRootDir)
-        self.compilerArtifactsRepository = CompilerArtifactsRepository(
-            compilerArtifactsRootDir
+        compiler_artifacts_root_dir = self.dir / "objects"
+        ensure_dir_exists(compiler_artifacts_root_dir)
+        self.compiler_artifacts_repository = CompilerArtifactsRepository(
+            compiler_artifacts_root_dir
         )
 
-        self.configuration = Configuration(
-            os.path.join(self.dir, "config.txt"))
-        self.statistics = Statistics(os.path.join(self.dir, "stats.txt"))
+        self.configuration = Configuration(self.dir / "config.txt")
+        self.persistent_stats = PersistentStats(self.dir / "stats.txt")
+        self.current_stats = Stats()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.persistent_stats.combine_with(self.current_stats)
+        self.persistent_stats.save()
 
     @property
     @contextlib.contextmanager
     def lock(self):
-        with allSectionsLocked(self.manifestRepository), allSectionsLocked(
-            self.compilerArtifactsRepository
+        with all_sections_locked(self.manifests_repository), all_sections_locked(
+            self.compiler_artifacts_repository
         ):
             yield
 
-    def lockFor(self, key):
+    def lock_for(self, key: str):
         # assert isinstance(self.compilerArtifactsRepository.section(key).lock, CacheLock)
-        return self.compilerArtifactsRepository.section(key).lock
+        return self.compiler_artifacts_repository.section(key).lock
 
     def __str__(self):
-        return f"Disk cache at {self.dir}"
+        return f"disk cache at {self.dir}"
 
-    def manifestLockFor(self, key):
-        return self.manifestRepository.section(key).lock
+    def manifest_lock_for(self, key: str) -> CacheLock:
+        '''Get the lock for the given key or raise a KeyError if the entry does not exist.'''
+        return self.manifests_repository.section(key).lock
 
-    def getEntry(self, key):
-        return self.compilerArtifactsRepository.section(key).getEntry(key)
+    def get_entry(self, key: str) -> CompilerArtifacts:
+        '''Get the entry for the given key or raise a KeyError if the entry does not exist.'''
+        return self.compiler_artifacts_repository.section(key).get_entry(key)
 
-    def setEntry(self, key, value):
-        return self.compilerArtifactsRepository.section(key).setEntry(key, value)
+    def set_entry(self, key: str, value) -> int:
+        '''Set the entry for the given key to the given value and return the size of the entry in bytes.'''
+        return self.compiler_artifacts_repository.section(key).set_entry(key, value)
 
-    def setEntryFromPayload(self, key, payload):
-        return self.compilerArtifactsRepository.section(key).setEntryFromPayload(
+    def set_entry_from_payload(self, key: str, payload: dict) -> int:
+        '''Set the entry for the given key to the given value and return the size of the entry in bytes.'''
+        return self.compiler_artifacts_repository.section(key).set_entry_from_payload(
             key, payload
         )
 
-    def directoryForCache(self, key):
-        return self.compilerArtifactsRepository.section(key).cacheEntryDir(key)
+    def get_directory_for_key(self, key: str) -> Path:
+        '''Get the directory for the given key or raise a KeyError if the entry does not exist.'''
+        return self.compiler_artifacts_repository.section(key).cache_entry_dir(key)
 
-    def hasEntry(self, cachekey):
-        return self.compilerArtifactsRepository.section(cachekey).hasEntry(cachekey)
+    def has_entry(self, cachekey: str) -> Tuple[bool, bool]:
+        '''
+        Determines whether the cache contains an entry for the given key.
 
-    def setManifest(self, manifestHash, manifest):
-        self.manifestRepository.section(manifestHash).setManifest(
+        Returns:
+            A tuple of (has entry, is local cache entry).
+        '''
+        return self.compiler_artifacts_repository.section(cachekey).has_entry(cachekey)
+
+    def set_manifest(self, manifestHash, manifest):
+        self.manifests_repository.section(manifestHash).set_manifest(
             manifestHash, manifest
         )
 
-    def getManifest(self, manifestHash):
-        return self.manifestRepository.section(manifestHash).getManifest(manifestHash)
+    def get_manifest(self, manifestHash):
+        return self.manifests_repository.section(manifestHash).get_manifest(manifestHash)
 
-    def clean(self, stats, maximumSize):
-        currentSize = stats.currentCacheSize()
-        if currentSize < maximumSize:
+    def clear(self):
+        self._clean(0)
+
+    def clean(self):
+        self._clean(self.configuration.max_cache_size())
+
+    def _clean(self, max_size: int):
+        cur_size = self.persistent_stats.cache_size() + self.current_stats.cache_size()
+        if cur_size < max_size:
             return
 
         # Free at least 10% to avoid cleaning up too often which
         # is a big performance hit with large caches.
-        effectiveMaximumSizeOverall = maximumSize * 0.9
+        max_overall_size = max_size * 0.9
 
         # Split limit in manifests (10 %) and objects (90 %)
-        effectiveMaximumSizeManifests = effectiveMaximumSizeOverall * 0.1
-        effectiveMaximumSizeObjects = (
-            effectiveMaximumSizeOverall - effectiveMaximumSizeManifests
-        )
+        max_manifests_size = max_overall_size * 0.1
+        max_objects_size = (max_overall_size - max_manifests_size)
 
         # Clean manifests
-        currentSizeManifests = self.manifestRepository.clean(
-            effectiveMaximumSizeManifests
-        )
+        new_manif_size = self.manifests_repository.clean(
+            int(max_manifests_size))
 
         # Clean artifacts
-        (
-            currentCompilerArtifactsCount,
-            currentCompilerArtifactsSize,
-        ) = self.compilerArtifactsRepository.clean(effectiveMaximumSizeObjects)
+        (new_count, new_size,) = self.compiler_artifacts_repository.clean(
+            int(max_objects_size))
 
-        stats.setCacheSize(currentCompilerArtifactsSize + currentSizeManifests)
-        stats.setNumCacheEntries(currentCompilerArtifactsCount)
+        self.persistent_stats.set_cache_size(new_size + new_manif_size)
+        self.current_stats.clear_cache_size()
+        self.persistent_stats.set_cache_entries(new_count)
+        self.current_stats.clear_cache_entries()

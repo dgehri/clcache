@@ -1,19 +1,32 @@
 import contextlib
 import os
+from pathlib import Path
+from typing import Optional, Tuple
 
-from .file_cache import CacheFileStrategy
+from .stats import CacheStats, HitReason, MissReason, PersistentStats, Stats
+from ..utils.util import trace
+from .file_cache import CacheFileStrategy, CompilerArtifacts
 from .remote_cache import CacheFileWithCouchbaseFallbackStrategy
-from .ex import CacheLockException
 
 
 class Cache:
-    def __init__(self, cacheDirectory=None):
-        if os.environ.get("CLCACHE_COUCHBASE"):
-            self.strategy = CacheFileWithCouchbaseFallbackStrategy(
-                os.environ.get("CLCACHE_COUCHBASE"), cacheDirectory=cacheDirectory
-            )
-        else:
-            self.strategy = CacheFileStrategy(cacheDirectory=cacheDirectory)
+    def __init__(self, cache_dir: Optional[Path] = None):
+        if url := os.environ.get("CLCACHE_COUCHBASE"):
+            try:
+                self.strategy = CacheFileWithCouchbaseFallbackStrategy(
+                    url, cacheDirectory=cache_dir)
+                return
+            except Exception as e:
+                trace(f"Failed to initialize Couchbase cache using {url}")
+
+        self.strategy = CacheFileStrategy(cache_dir=cache_dir)
+
+    def __enter__(self):
+        self.strategy.__enter__()
+        return self
+
+    def __exit__(self, typ, value, traceback):
+        self.strategy.__exit__(typ, value, traceback)
 
     def __str__(self):
         return str(self.strategy)
@@ -23,8 +36,8 @@ class Cache:
         return self.strategy.lock
 
     @contextlib.contextmanager
-    def manifestLockFor(self, key):
-        with self.strategy.manifestLockFor(key):
+    def manifest_lock_for(self, key: str):
+        with self.strategy.manifest_lock_for(key):
             yield
 
     @property
@@ -32,56 +45,126 @@ class Cache:
         return self.strategy.configuration
 
     @property
-    def statistics(self):
-        return self.strategy.statistics
+    def statistics(self) -> Stats:
+        return self.strategy.current_stats
 
-    def clean(self, stats, maximumSize):
-        return self.strategy.clean(stats, maximumSize)
+    @property
+    def persistent_stats(self) -> PersistentStats:
+        return self.strategy.persistent_stats
+
+    def clean(self):
+        self.strategy.clean()
+
+    def clear(self):
+        self.strategy.clear()
 
     @contextlib.contextmanager
-    def lockFor(self, key):
-        with self.strategy.lockFor(key):
+    def lock_for(self, key: str):
+        with self.strategy.lock_for(key):
             yield
 
-    def getEntry(self, key):
-        return self.strategy.getEntry(key)
+    def get_entry(self, key: str):
+        return self.strategy.get_entry(key)
 
-    def setEntry(self, key, value):
-        return self.strategy.setEntry(key, value)
+    def set_entry(self, key: str, value):
+        return self.strategy.set_entry(key, value)
 
-    def hasEntry(self, cachekey):
-        return self.strategy.hasEntry(cachekey)
+    def has_entry(self, cachekey) -> Tuple[bool, bool]:
+        '''
+        Returns true if the cache contains an entry for the given key.
 
-    def setManifest(self, manifestHash, manifest):
-        self.strategy.setManifest(manifestHash, manifest)
+        Returns:
+            A tuple of (has entry, is local cache entry).
+        '''
+        return self.strategy.has_entry(cachekey)
 
-    def getManifest(self, manifestHash):
-        return self.strategy.getManifest(manifestHash)
+    def set_manifest(self, manifestHash, manifest):
+        self.strategy.set_manifest(manifestHash, manifest)
 
-
-def cleanCache(cache_ref):
-    with cache_ref.lock, cache_ref.statistics as stats, cache_ref.configuration as cfg:
-        cache_ref.clean(stats, cfg.maximumCacheSize())
-
-
-def clearCache(cache_ref):
-    with cache_ref.lock, cache_ref.statistics as stats:
-        cache_ref.clean(stats, 0)
+    def get_manifest(self, manifestHash):
+        return self.strategy.get_manifest(manifestHash)
 
 
-def updateCacheStatistics(cache_ref, method):
-    with contextlib.suppress(CacheLockException):
-        with cache_ref.statistics.lock, cache_ref.statistics as stats:
-            method(stats)
+def clean_cache(cache: Cache):
+    with cache.lock:
+        cache.clean()
 
 
-def addObjectToCache(stats, cache_ref, cachekey, artifacts):
+def clear_cache(cache: Cache):
+    with cache.lock:
+        cache.clear()
+
+
+def add_object_to_cache(cache: Cache, cachekey: str, artifacts: CompilerArtifacts):
     # This function asserts that the caller locked 'section' and 'stats'
     # already and also saves them
-    size = cache_ref.setEntry(cachekey, artifacts)
+    size = cache.set_entry(cachekey, artifacts)
     if size is None:
-        size = os.path.getsize(artifacts.objectFilePath)
-    stats.registerCacheEntry(size)
+        size = os.path.getsize(artifacts.obj_file_path)
 
-    with cache_ref.configuration as cfg:
-        return stats.currentCacheSize() >= cfg.maximumCacheSize()
+    cache.statistics.register_cache_entry(size)
+
+
+def is_cache_cleanup_required(cache: Cache):
+    return cache.persistent_stats.cache_size() + \
+        cache.statistics.cache_size() > cache.configuration.max_cache_size()
+
+
+def print_statistics(cache: Cache):
+    template = """
+clcache statistics:
+  current cache dir            : {}
+  cache size                   : {:,.1f} MB
+  maximum cache size           : {:,.0f} GB
+  cache entries                : {}
+  cache hits (total)           : {} ({:.0f}%)
+  cache hits (remote)          : {} ({:.0f}%)
+  cache misses
+    total                      : {} ({:.0f}%)
+    header changed             : {}
+    source changed             : {}
+  passed to real compiler
+    called w/ invalid argument : {}
+    called for preprocessing   : {}
+    called for linking         : {}
+    called for external debug  : {}
+    called w/o source          : {}
+    called w/ multiple sources : {}
+    called w/ PCH              : {}""".strip()
+
+    stats = cache.persistent_stats
+    cfg = cache.configuration
+    total_cache_hits = stats.total_cache_hits()
+    total_cache_misses = stats.total_cache_misses()
+    total_cache_access = total_cache_hits + total_cache_misses
+
+    print(
+        template.format(
+            str(cache),
+            stats.get(CacheStats.CACHE_SIZE) / 1024 / 1024,
+            cfg.max_cache_size() / 1024 / 1024 / 1024,
+            stats.get(CacheStats.CACHE_ENTRIES),
+            total_cache_hits,
+            float(100 * total_cache_hits) /
+            float(total_cache_access) if total_cache_access != 0 else 0,
+            stats.get(HitReason.REMOTE_CACHE_HIT),
+            float(100 * stats.get(HitReason.REMOTE_CACHE_HIT)) /
+            float(total_cache_access) if total_cache_access != 0 else 0,
+            total_cache_misses,
+            float(100 * total_cache_misses) /
+            float(total_cache_access) if total_cache_access != 0 else 0,
+            stats.get(MissReason.HEADER_CHANGED_MISS),
+            stats.get(MissReason.SOURCE_CHANGED_MISS),
+            stats.get(MissReason.CALL_WITH_INVALID_ARGUMENT),
+            stats.get(MissReason.CALL_FOR_PREPROCESSING),
+            stats.get(MissReason.CALL_FOR_LINKING),
+            stats.get(MissReason.CALL_FOR_EXTERNAL_DEBUG_INFO),
+            stats.get(MissReason.CALL_WITHOUT_SOURCE_FILE),
+            stats.get(MissReason.CALL_WITH_MULTIPLE_SOURCE_FILES),
+            stats.get(MissReason.CALL_WITH_PCH)
+        )
+    )
+
+
+def reset_stats(cache: Cache):
+    cache.persistent_stats.reset()

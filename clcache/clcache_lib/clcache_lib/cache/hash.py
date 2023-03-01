@@ -1,14 +1,13 @@
-from ast import Dict
 import hashlib
 import os
 import errno
+from pathlib import Path
 import pickle
 from ctypes import windll, wintypes
-from typing import Dict
+from typing import List, Optional
 
 from ..config import CACHE_VERSION
-from ..utils import trace
-from .virt import substituteIncludeBaseDirPlaceholder
+from .virt import subst_basedir_with_placeholder, is_in_build_dir
 
 HashAlgorithm = hashlib.md5
 
@@ -16,8 +15,15 @@ HashAlgorithm = hashlib.md5
 NMPWAIT_WAIT_FOREVER = wintypes.DWORD(0xFFFFFFFF)
 ERROR_PIPE_BUSY = 231
 
-def getCompilerHash(compilerBinary):
-    stat = os.stat(compilerBinary)
+
+def get_compiler_hash(compiler_path: Path) -> str:
+    '''
+    Returns the hash of the given compiler executable.
+    
+    The hash is based on the file modification time, file 
+    size and the cache version.
+    '''
+    stat = os.stat(compiler_path)
     data = "|".join(
         [
             str(stat.st_mtime),
@@ -30,15 +36,26 @@ def getCompilerHash(compilerBinary):
     return hasher.hexdigest()
 
 
-def getFileHashes(filePaths):
+def get_file_hashes(path_list: List[Path]) -> List[str]:
+    '''
+    Returns the hashes of the given files.
+    
+    Parameters:
+        path_list: The paths of the files to hash.
+        
+    Returns:
+        The hashes of the files.
+    '''
+    # Try fetching the hashes from the server
     if "CLCACHE_SERVER" not in os.environ:
-        return [getFileHashCached(filePath) for filePath in filePaths]
+        return [_get_file_hash_cached(path) for path in path_list]
 
+    # If the server is not available, fall back to the local cache
     pipeName = r"\\.\pipe\clcache_srv"
     while True:
         try:
             with open(pipeName, "w+b") as f:
-                f.write("\n".join(filePaths).encode("utf-8"))
+                f.write("\n".join(str(path_list)).encode("utf-8"))
                 f.write(b"\x00")
                 response = f.read()
                 if response.startswith(b"!"):
@@ -54,35 +71,59 @@ def getFileHashes(filePaths):
                 raise
 
 
-knownHashes: Dict[str, str] = {}
+def _get_file_hash_cached(path: Path) -> str:
+    '''
+    Returns the hash of the given file.
+    '''
+    if path in _get_file_hash_cached.knownHashes:
+        return _get_file_hash_cached.knownHashes[path]
+    checksum = get_file_hash(path)
+    _get_file_hash_cached.knownHashes[path] = checksum
+    return checksum
 
 
-def getFileHashCached(filePath):
-    if filePath in knownHashes:
-        return knownHashes[filePath]
-    c = getFileHash(filePath)
-    knownHashes[filePath] = c
-    return c
+_get_file_hash_cached.knownHashes = {}
 
 
-def getFileHash(filePath, additionalData=None):
+def get_file_hash(path: Path, toolset_data: Optional[str] = None) -> str:
+    '''
+    Returns the hash of the given file.
+
+    Parameters:
+        path: The path of the file to hash.
+        toolset_data: Additional data to include in the hash.
+
+    Returns:
+        The hash of the file.
+    '''
     hasher = HashAlgorithm()
-    with open(filePath, "rb") as inFile:
-        hasher.update(substituteIncludeBaseDirPlaceholder(inFile.read()))
+
+    with open(path, "rb") as f:
+        src_content = f.read()
+
+        # If the file is in the build directory, it may contain references 
+        # (includes, comments) to the files in the base (source) directory. 
+        # We need to replace those references with a placeholder to make the 
+        # hash independent of that information.
+        if is_in_build_dir(path):
+            # get containing folder of path
+            src_dir = path.parent
+            src_content = subst_basedir_with_placeholder(src_content,  src_dir)
+        hasher.update(src_content)
 
     # trace(f"File hash: {filePath} => {hasher.hexdigest()}", 2)
 
-    if additionalData is not None:
+    if toolset_data is not None:
         # Encoding of this additional data does not really matter
         # as long as we keep it fixed, otherwise hashes change.
         # The string should fit into ASCII, so UTF8 should not change anything
-        hasher.update(additionalData.encode("UTF-8"))
+        hasher.update(toolset_data.encode("UTF-8"))
         # trace(f"AdditionalData Hash: {hasher.hexdigest()}: {additionalData}", 2)
 
     return hasher.hexdigest()
 
 
-def getStringHash(dataString):
+def get_string_hash(dataString):
     hasher = HashAlgorithm()
     hasher.update(dataString.encode("UTF-8"))
     return hasher.hexdigest()

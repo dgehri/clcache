@@ -1,4 +1,5 @@
 from ctypes import windll, wintypes
+from pathlib import Path
 # import datetime
 from .ex import CacheLockException
 # from ..utils import trace
@@ -11,13 +12,13 @@ class CacheLock:
     WAIT_ABANDONED_CODE = 0x00000080
     WAIT_TIMEOUT_CODE = 0x00000102
 
-    def __init__(self, mutexName, timeoutMs):
+    def __init__(self, mutexName: str, timeoutMs: int):
         self._mutexName = "Local\\" + mutexName
         self._mutex = None
         self._timeoutMs = timeoutMs
         # self._t0 = None
 
-    def createMutex(self):
+    def create_mutex(self):
         self._mutex = windll.kernel32.CreateMutexW(
             None, wintypes.BOOL(False), self._mutexName
         )
@@ -37,7 +38,7 @@ class CacheLock:
         # trace(f"Acquiring lock {self._mutexName}...", 0)
         # self._t0 = datetime.datetime.now()
         if not self._mutex:
-            self.createMutex()
+            self.create_mutex()
         result = windll.kernel32.WaitForSingleObject(
             self._mutex, wintypes.INT(self._timeoutMs)
         )
@@ -61,7 +62,7 @@ class CacheLock:
         # trace(f"Released lock {self._mutexName} after {elapsed:.3f} s", 0)
         
     @staticmethod
-    def forPath(path):
+    def for_path(path: Path):
         timeoutMs = 10 * 1000
-        lockName = path.replace(":", "-").replace("\\", "-")
+        lockName = str(path).replace(":", "-").replace("\\", "-")
         return CacheLock(lockName, timeoutMs)

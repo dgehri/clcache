@@ -1,26 +1,25 @@
-from .util import PersistentJSONDict
+from pathlib import Path
+from typing import Optional
+from .persistent_json_dict import PersistentJsonDict
+
 
 class Configuration:
-    _defaultValues = {"MaximumCacheSize": 40737418240}  # 40 GiB
+    _defaults = {"MaximumCacheSize": 40737418240}  # 40 GiB
 
-    def __init__(self, configurationFile):
-        self._configurationFile = configurationFile
-        self._cfg = None
+    def __init__(self, file_name: Path):
+        self._dict = PersistentJsonDict(file_name)
 
-    def __enter__(self):
-        self._cfg = PersistentJSONDict(self._configurationFile)
-        for setting, defaultValue in self._defaultValues.items():
-            if setting not in self._cfg:
-                self._cfg[setting] = defaultValue
-        return self
+        for setting, default_value in self._defaults.items():
+            if setting not in self._dict:
+                self._dict[setting] = default_value
 
-    def __exit__(self, typ, value, traceback):
-        # Does not write to disc when unchanged
-        self._cfg.save()
+    def save(self):
+        self._dict.save()
 
-    def maximumCacheSize(self):
-        return self._cfg["MaximumCacheSize"]
+    def max_cache_size(self):
+        assert self._dict is not None
+        return self._dict["MaximumCacheSize"]
 
-    def setMaximumCacheSize(self, size):
-        self._cfg["MaximumCacheSize"] = size
-
+    def set_max_cache_size(self, size):
+        assert self._dict is not None
+        self._dict["MaximumCacheSize"] = size

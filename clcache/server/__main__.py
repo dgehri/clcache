@@ -1,8 +1,10 @@
 # We often don't use all members of all the pyuv callbacks
 # pylint: disable=unused-argument
+from ast import Dict
 import hashlib
 import logging
 import os
+from pathlib import Path
 import pickle
 import signal
 import argparse
@@ -13,14 +15,15 @@ import pyuv
 class HashCache:
     def __init__(self, loop, excludePatterns, disableWatching):
         self._loop = loop
-        self._watchedDirectories = {}
+        self._watchedDirectories  = {}
         self._handlers = []
         self._excludePatterns = excludePatterns or []
         self._disableWatching = disableWatching
 
-    def getFileHash(self, path):
+    def getFileHash(self, path: Path):
         logging.debug("getting hash for %s", path)
-        dirname, basename = os.path.split(os.path.normcase(path))
+        dirname = str(path.parent).lower()
+        basename = path.name.lower()
 
         watchedDirectory = self._watchedDirectories.get(dirname, {})
         hashsum = watchedDirectory.get(basename)
@@ -41,7 +44,7 @@ class HashCache:
         logging.debug("calculated and stored hashsum %s", hashsum)
         return hashsum
 
-    def _startWatching(self, dirname):
+    def _startWatching(self, dirname: str):
         ev = pyuv.fs.FSEvent(self._loop)
         ev.start(dirname, 0, self._onPathChange)
         self._handlers.append(ev)

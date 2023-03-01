@@ -1,15 +1,17 @@
 import codecs
 import multiprocessing
 import os
+from pathlib import Path
 import re
 import sys
 import subprocess
 from collections import defaultdict
 from tempfile import TemporaryFile
-from typing import List, Tuple
+from typing import Dict, List, Optional, Tuple, Union
 
-from ..utils import basename_without_extension, trace
+from ..utils import trace
 from ..config import CL_DEFAULT_CODEC
+
 
 class AnalysisError(Exception):
     pass
@@ -41,6 +43,7 @@ class CalledForPreprocessingError(AnalysisError):
 
 class InvalidArgumentError(AnalysisError):
     pass
+
 
 class CommandLineTokenizer:
     def __init__(self, content):
@@ -122,37 +125,40 @@ def split_comands_file(content):
     return CommandLineTokenizer(content).argv
 
 
-def expand_cmdline(cmdline):
+def expand_response_file(cmdline):
+    '''
+    Expand command line arguments that start with @ to the contents of the (response) file.
+    '''
     ret = []
 
     for arg in cmdline:
         if arg[0] == "@":
-            includeFile = arg[1:]
-            with open(includeFile, "rb") as f:
-                rawBytes = f.read()
+            response_file = arg[1:]
+            with open(response_file, "rb") as f:
+                raw_bytes = f.read()
 
             encoding = None
 
-            bomToEncoding = {
+            bom_to_encoding = {
                 codecs.BOM_UTF32_BE: "utf-32-be",
                 codecs.BOM_UTF32_LE: "utf-32-le",
                 codecs.BOM_UTF16_BE: "utf-16-be",
                 codecs.BOM_UTF16_LE: "utf-16-le",
             }
 
-            for bom, enc in bomToEncoding.items():
-                if rawBytes.startswith(bom):
+            for bom, enc in bom_to_encoding.items():
+                if raw_bytes.startswith(bom):
                     encoding = enc
-                    rawBytes = rawBytes[len(bom) :]
+                    raw_bytes = raw_bytes[len(bom):]
                     break
 
             if encoding:
-                includeFileContents = rawBytes.decode(encoding)
+                response_file_content = raw_bytes.decode(encoding)
             else:
-                includeFileContents = rawBytes.decode("UTF-8")
+                response_file_content = raw_bytes.decode("UTF-8")
 
             ret.extend(
-                expand_cmdline(split_comands_file(includeFileContents.strip()))
+                expand_response_file(split_comands_file(response_file_content.strip()))
             )
         else:
             ret.append(arg)
@@ -160,18 +166,26 @@ def expand_cmdline(cmdline):
     return ret
 
 
-def extend_cmdline_from_env(cmdLine, environment):
-    remainingEnvironment = environment.copy()
+def extend_cmdline_from_env(cmd_line: List[str],
+                            environment: Dict[str, str]) \
+        -> Tuple[List[str], Dict[str, str]]:
+    '''
+    Extend command line with CL and _CL_ environment variables
+    
+    See https://learn.microsoft.com/en-us/cpp/build/reference/cl-environment-variables
+    '''
+    
+    _env = environment.copy()
 
-    prependCmdLineString = remainingEnvironment.pop("CL", None)
-    if prependCmdLineString is not None:
-        cmdLine = split_comands_file(prependCmdLineString.strip()) + cmdLine
+    prefix = _env.pop("CL", None)
+    if prefix is not None:
+        cmd_line = split_comands_file(prefix.strip()) + cmd_line
 
-    appendCmdLineString = remainingEnvironment.pop("_CL_", None)
-    if appendCmdLineString is not None:
-        cmdLine = cmdLine + split_comands_file(appendCmdLineString.strip())
+    postfix = _env.pop("_CL_", None)
+    if postfix is not None:
+        cmd_line += split_comands_file(postfix.strip())
 
-    return cmdLine, remainingEnvironment
+    return cmd_line, _env
 
 
 class Argument:
@@ -213,7 +227,8 @@ class ArgumentT4(Argument):
 
 
 class CommandLineAnalyzer:
-    argumentsWithParameter = {
+
+    _args_with_params = {
         # /NAMEparameter
         ArgumentT1("Ob"),
         ArgumentT1("Yl"),
@@ -264,41 +279,57 @@ class CommandLineAnalyzer:
         # /NAME parameter
         ArgumentT4("Xclang"),
     }
-    argumentsWithParameterSorted = sorted(argumentsWithParameter, key=len, reverse=True)
+    _args_with_params_sorted = sorted(
+        _args_with_params, key=len, reverse=True)
 
     @staticmethod
-    def _getParameterizedArgumentType(cmdLineArgument):
+    def _get_parametrized_arg_type(cmd_line_arg: str) -> Optional[Argument]:
+        '''
+        Get typed argument from command line argument.
+        '''
         return next(
             (
                 arg
-                for arg in CommandLineAnalyzer.argumentsWithParameterSorted
-                if cmdLineArgument.startswith(arg.name, 1)
+                for arg in CommandLineAnalyzer._args_with_params_sorted
+                if cmd_line_arg.startswith(arg.name, 1)
             ),
             None,
         )
 
     @staticmethod
-    def parseArgumentsAndInputFiles(cmdline):
+    def parse_args_and_input_files(cmdline: List[str]) -> Tuple[Dict[str, List[str]], List[Path]]:
+        '''
+        Parse command line arguments and input files.
+
+        Parameters:
+            cmdline: The command line to parse.
+
+        Returns:
+            A tuple of two elements: 
+            - The first element is a dictionary mapping argument names to a list of argument values. 
+            - The second element is a list of input files.
+        '''
         arguments = defaultdict(list)
-        inputFiles = []
+        input_files: List[Path] = []
         i = 0
         while i < len(cmdline):
-            cmdLineArgument = cmdline[i]
+            arg_str: str = cmdline[i]
 
             # Plain arguments starting with / or -
-            if cmdLineArgument.startswith("/") or cmdLineArgument.startswith("-"):
-                arg = CommandLineAnalyzer._getParameterizedArgumentType(cmdLineArgument)
+            if arg_str.startswith("/") or arg_str.startswith("-"):
+                arg = CommandLineAnalyzer._get_parametrized_arg_type(
+                    arg_str)
                 if arg is not None:
                     if isinstance(arg, ArgumentT1):
-                        value = cmdLineArgument[len(arg) + 1 :]
+                        value = arg_str[len(arg) + 1:]
                         if not value:
                             raise InvalidArgumentError(
                                 f"Parameter for {arg} must not be empty"
                             )
                     elif isinstance(arg, ArgumentT2):
-                        value = cmdLineArgument[len(arg) + 1 :]
+                        value = arg_str[len(arg) + 1:]
                     elif isinstance(arg, ArgumentT3):
-                        value = cmdLineArgument[len(arg) + 1 :]
+                        value = arg_str[len(arg) + 1:]
                         if not value:
                             value = cmdline[i + 1]
                             i += 1
@@ -313,38 +344,52 @@ class CommandLineAnalyzer:
                     arguments[arg.name].append(value)
                 else:
                     # name not followed by parameter in this case
-                    argumentName = cmdLineArgument[1:]
-                    arguments[argumentName].append("")
+                    arg_name = arg_str[1:]
+                    arguments[arg_name].append("")
 
-            elif cmdLineArgument[0] == "@":
+            elif arg_str[0] == "@":
                 raise AssertionError(
                     "No response file arguments (starting with @) must be left here."
                 )
 
             else:
-                inputFiles.append(cmdLineArgument)
+                input_files.append(Path(arg_str))
 
             i += 1
 
-        return dict(arguments), inputFiles
+        return dict(arguments), input_files
 
     @staticmethod
-    def analyze(cmdline: List[str]) -> Tuple[List[Tuple[str, str]], List[str]]:
-        options, inputFiles = CommandLineAnalyzer.parseArgumentsAndInputFiles(cmdline)
+    def analyze(cmdline: List[str]) -> Tuple[List[Tuple[Path, str]], List[Path]]:
+        '''
+        Analyzes the command line and returns a list of input and output files.
+
+        Parameters:
+            cmdline: The command line to analyze.
+
+        Returns:
+            A tuple of two lists. The first list contains tuples of input files 
+            and their type (either /Tp or /Tc). 
+            The second list contains output (object) files.
+        '''
+
+        options, orig_input_files = CommandLineAnalyzer.parse_args_and_input_files(
+            cmdline)
+
         # Use an override pattern to shadow input files that have
         # already been specified in the function above
-        inputFiles = {inputFile: "" for inputFile in inputFiles}
+        input_file_dict = {f: "" for f in orig_input_files}
         compl = False
         if "Tp" in options:
-            inputFiles |= {inputFile: "/Tp" for inputFile in options["Tp"]}
+            input_file_dict |= {Path(f): "/Tp" for f in options["Tp"]}
             compl = True
         if "Tc" in options:
-            inputFiles |= {inputFile: "/Tc" for inputFile in options["Tc"]}
+            input_file_dict |= {Path(f): "/Tc" for f in options["Tc"]}
             compl = True
 
         # Now collect the inputFiles into the return format
-        inputFiles = list(inputFiles.items())
-        if not inputFiles:
+        input_files = list(input_file_dict.items())
+        if not input_files:
             raise NoSourceFileError()
 
         for opt in ["E", "EP", "P"]:
@@ -362,99 +407,98 @@ class CommandLineAnalyzer:
         if "link" in options or "c" not in options:
             raise CalledForLinkError()
 
-        if len(inputFiles) > 1 and compl:
+        if len(input_files) > 1 and compl:
             raise MultipleSourceFilesComplexError()
 
-        objectFiles = None
-        prefix = ""
+        obj_files = None
+        prefix = Path()
         if "Fo" in options and options["Fo"][0]:
             # Handle user input
-            tmp = os.path.normpath(options["Fo"][0])
-            if os.path.isdir(tmp):
+            tmp = Path(options["Fo"][0])
+            if tmp.is_dir():
                 prefix = tmp
-            elif len(inputFiles) == 1:
-                objectFiles = [tmp]
-        if objectFiles is None:
+            elif len(input_file_dict) == 1:
+                obj_files = [tmp]
+        if obj_files is None:
             # Generate from .c/.cpp filenames
-            objectFiles = [
-                f"{os.path.join(prefix, basename_without_extension(f))}.obj"
-                for f, _ in inputFiles
+            obj_files = [
+                (prefix / f).with_suffix(".obj")
+                for f, _ in input_files
             ]
 
-        trace(f"Compiler source files: {inputFiles}")
-        trace(f"Compiler object file: {objectFiles}")
-        return inputFiles, objectFiles
+        trace(f"Compiler source files: {input_files}")
+        trace(f"Compiler object file: {obj_files}")
+        return input_files, obj_files
 
 
-def invoke_real_compiler(
-    compilerBinary, cmdLine, captureOutput=False, outputAsString=True, environment=None
-):
-    realCmdline = [compilerBinary] + cmdLine
+def invoke_real_compiler(compiler_path: Path, cmd_line: List[str], capture_output: bool = False, environment: Optional[Dict[str, str]] = None) -> Tuple[int, str, str]:
+    '''Invoke the real compiler and return its exit code, stdout and stderr.'''
+
+    read_cmd_line = [str(compiler_path)] + cmd_line
 
     # if command line longer than 32767 chars, use a response file
     # See https://devblogs.microsoft.com/oldnewthing/20031210-00/?p=41553
-    if len(" ".join(realCmdline)) >= 32000:  # keep some chars as a safety margin
-        with TemporaryFile(mode="wt", suffix=".rsp") as rspFile:
-            rspFile.writelines(" ".join(cmdLine) + "\n")
-            rspFile.flush()
+    if len(" ".join(read_cmd_line)) >= 32000:  # keep some chars as a safety margin
+        with TemporaryFile(mode="wt", suffix=".rsp") as rsp_file:
+            rsp_file.writelines(" ".join(cmd_line) + "\n")
+            rsp_file.flush()
             return invoke_real_compiler(
-                compilerBinary,
-                [f"@{os.path.realpath(rspFile.name)}"],
-                captureOutput,
-                outputAsString,
+                compiler_path,
+                [f"@{os.path.realpath(rsp_file.name)}"],
+                capture_output,
                 environment,
             )
 
-    trace(f"Invoking real compiler as {realCmdline}")
+    trace(f"Invoking real compiler as {read_cmd_line}")
 
-    environment = environment or os.environ
+    environment = environment or dict(os.environ)
 
     # Environment variable set by the Visual Studio IDE to make cl.exe write
     # Unicode output to named pipes instead of stdout. Unset it to make sure
     # we can catch stdout output.
     environment.pop("VS_UNICODE_OUTPUT", None)
 
-    returnCode = None
-    stdout = b""
-    stderr = b""
-    if captureOutput:
+    return_code: int = -1
+    stdout: str = ""
+    stderr: str = ""
+    if capture_output:
         # Don't use subprocess.communicate() here, it's slow due to internal
         # threading.
-        with TemporaryFile() as stdoutFile, TemporaryFile() as stderrFile:
+        with TemporaryFile() as stdout_file, TemporaryFile() as stderr_file:
             compilerProcess = subprocess.Popen(
-                realCmdline, stdout=stdoutFile, stderr=stderrFile, env=environment
+                read_cmd_line, stdout=stdout_file, stderr=stderr_file, env=environment
             )
-            returnCode = compilerProcess.wait()
-            stdoutFile.seek(0)
-            stdout = stdoutFile.read()
-            stderrFile.seek(0)
-            stderr = stderrFile.read()
+            return_code = compilerProcess.wait()
+            stdout_file.seek(0)
+            stdout = stdout_file.read().decode(CL_DEFAULT_CODEC)
+            stderr_file.seek(0)
+            stderr = stderr_file.read().decode(CL_DEFAULT_CODEC)
     else:
         sys.stdout.flush()
         sys.stderr.flush()
-        returnCode = subprocess.call(realCmdline, env=environment)
+        return_code = subprocess.call(read_cmd_line, env=environment)
 
-    trace("Real compiler returned code {0:d}".format(returnCode))
+    trace("Real compiler returned code {0:d}".format(return_code))
 
-    if outputAsString:
-        stdoutString = stdout.decode(CL_DEFAULT_CODEC)
-        stderrString = stderr.decode(CL_DEFAULT_CODEC)
-        return returnCode, stdoutString, stderrString
-
-    return returnCode, stdout, stderr
+    return return_code, stdout, stderr
 
 
-# Returns the amount of jobs which should be run in parallel when
-# invoked in batch mode as determined by the /MP argument
-def job_count(cmdLine):
-    mpSwitches = [arg for arg in cmdLine if re.match(r"^/MP(\d+)?$", arg)]
-    if not mpSwitches:
+def job_count(cmd_line: List[str]) -> int:
+    '''
+    Returns the amount of jobs
+
+    Returns the amount of jobs which should be run in parallel when 
+    invoked in batch mode as determined by the /MP argument.
+    '''
+    mp_switches = [arg for arg in cmd_line if re.match(r"^/MP(\d+)?$", arg)]
+    if not mp_switches:
         return 1
 
-    # the last instance of /MP takes precedence
-    mpSwitch = mpSwitches.pop()
+    # The last instance of /MP takes precedence
+    mp_switch = mp_switches.pop()
 
-    count = mpSwitch[3:]
+    # Get count from /MP:count
+    count = mp_switch[3:]
     if count != "":
         return int(count)
 
