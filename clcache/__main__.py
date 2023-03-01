@@ -100,15 +100,15 @@ def process_cache_hit(cache: Cache, is_local: bool, obj_file: Path, cache_key: s
             if not success:
                 obj_file.unlink()
 
-        cachedArtifacts = cache.get_entry(cache_key)
-        assert cachedArtifacts is not None
+        cached_artifacts = cache.get_entry(cache_key)
+        assert cached_artifacts is not None
 
-        copy_or_link(cachedArtifacts.obj_file_path, obj_file)
+        copy_or_link(cached_artifacts.obj_file_path, obj_file)
         trace("Finished. Exit code 0")
         return (
             0,
-            expand_compile_output(cachedArtifacts.stdout, StdStream.STDOUT),
-            expand_compile_output(cachedArtifacts.stderr, StdStream.STDERR),
+            expand_compile_output(cached_artifacts.stdout, StdStream.STDOUT),
+            expand_compile_output(cached_artifacts.stderr, StdStream.STDERR),
         )
 
 

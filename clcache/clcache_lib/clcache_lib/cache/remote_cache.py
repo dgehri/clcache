@@ -174,7 +174,7 @@ class CacheCouchbaseStrategy:
             self._fetchEntry(key)
         return None if self.cache[key] is None else self.cache[key]
 
-    def set_entry(self, key: str, artifacts) -> int:
+    def set_entry(self, key: str, artifacts: CompilerArtifacts) -> int:
         '''
         Stores the given artifacts in the cache.
         
@@ -184,9 +184,9 @@ class CacheCouchbaseStrategy:
         if self.is_bad:
             return 0
 
-        assert artifacts.objectFilePath
+        assert artifacts.obj_file_path
         try:
-            with open(artifacts.objectFilePath, "rb") as obj_file:
+            with open(artifacts.obj_file_path, "rb") as obj_file:
                 return self._setEntryFromFile(obj_file, key, artifacts)
         except Exception:
             trace(f"Could not set {key} in Couchbase {self.url}")

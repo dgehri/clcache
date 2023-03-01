@@ -489,6 +489,11 @@ class CacheFileStrategy:
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.persistent_stats.combine_with(self.current_stats)
         self.persistent_stats.save()
+        
+        # also save the current stats to the build directory
+        build_stats = PersistentStats(Path(BUILDDIR_STR) / "clcache.json")
+        build_stats.combine_with(self.current_stats)
+        build_stats.save()
 
     @property
     @contextlib.contextmanager
