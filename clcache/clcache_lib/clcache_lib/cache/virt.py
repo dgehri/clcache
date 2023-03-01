@@ -239,20 +239,21 @@ def expand_conan_placeholder(conan_user_home: Path, path_str: str) -> Path:
     # This case is more complicated: if the path doesn't exist, we
     # need to inspect the package directory .conan_link files, which
     # will contain the correct path
-    # The result of the below will be: ['<CONAN_USER_HOME>', '.conan', 'data', '<package>', '<version>', '<user>', '<channel>', '<package>', '<hash>', ...]
+    # The result of the below will be: ['<CONAN_USER_HOME>', '.conan', 'data',
+    # '<package>', '<version>', '<user>', '<channel>', '<package>', '<hash>', ...]
     path_parts = os.path.normpath(path_str).split(os.path.sep)
-    link_file = conan_user_home / os.path.sep.join(path_parts[1:9]) / ".conan_link"
-    
+    link_file = conan_user_home / \
+        os.path.sep.join(path_parts[1:9]) / ".conan_link"
+
     # check if in cache
-    if link_file not in expand_conan_placeholder.cache:    
+    if link_file not in expand_conan_placeholder.cache:
         short_path = None
         if link_file.is_file():
             with open(link_file, "r") as f:
                 short_path = Path(os.path.normpath(f.readline()))
-            
-        expand_conan_placeholder.cache[link_file] = short_path    
-            
-            
+
+        expand_conan_placeholder.cache[link_file] = short_path
+
     if short_path := expand_conan_placeholder.cache[link_file]:
         return short_path / os.path.sep.join(path_parts[9:])
     else:
@@ -261,6 +262,7 @@ def expand_conan_placeholder(conan_user_home: Path, path_str: str) -> Path:
 
 expand_conan_placeholder.cache = {}
 
+
 def expand_path(path: str) -> Path:
     """Expand a path, replacing placeholders with the actual values."""
     result: Path
@@ -268,7 +270,8 @@ def expand_path(path: str) -> Path:
         return value
     elif path.startswith(BASEDIR_REPLACEMENT):
         if BASEDIR_STR:
-            result = Path(path.replace(BASEDIR_REPLACEMENT, str(BASEDIR_STR), 1))
+            result = Path(path.replace(
+                BASEDIR_REPLACEMENT, str(BASEDIR_STR), 1))
         else:
             raise LogicException(
                 f"No CLCACHE_BASEDIR set, but found relative path {path}"
@@ -348,7 +351,7 @@ def get_conan_user_home(hint_path: Optional[Path] = None) -> Path:
         if v := os.environ.get("USERPROFILE"):
             hint_path = Path(v)
 
-    return hint_path.absolute() if hint_path else Path()
+    return hint_path.absolute().resolve() if hint_path else Path()
 
 
 def _get_conan_user_home_re(path: Optional[Path] = None) -> re.Pattern[str]:
@@ -388,7 +391,8 @@ def _canonicalize_conan_dir(path_str: str) -> Optional[str]:
         _canonicalize_conan_dir.RE_CONAN_USER_HOME = _get_conan_user_home_re()
         _canonicalize_conan_dir.RE_CONAN_USER_SHORT = _get_conan_user_home_short_re()
 
-    if _canonicalize_conan_dir.RE_CONAN_USER_SHORT is None or _canonicalize_conan_dir.RE_CONAN_USER_HOME is None:
+    if _canonicalize_conan_dir.RE_CONAN_USER_SHORT is None or \
+            _canonicalize_conan_dir.RE_CONAN_USER_HOME is None:
         return None
 
     # Check for Conan short folder (c:\.conan\) and replace with long form
