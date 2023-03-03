@@ -1,8 +1,8 @@
 # We often don't use all members of all the pyuv callbacks
 # pylint: disable=unused-argument
-from ast import Dict
 import hashlib
 import logging
+import mmap
 import os
 from pathlib import Path
 import pickle
@@ -20,7 +20,7 @@ class HashCache:
         self._excludePatterns = excludePatterns or []
         self._disableWatching = disableWatching
 
-    def getFileHash(self, path: Path):
+    def get_file_hash(self, path: Path):
         logging.debug("getting hash for %s", path)
         dirname = str(path.parent).lower()
         basename = path.name.lower()
@@ -32,24 +32,25 @@ class HashCache:
             return hashsum
 
         with open(path, 'rb') as f:
-            hashsum = hashlib.md5(f.read()).hexdigest()
+            with mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ) as mm:
+                hashsum = hashlib.md5(mm).hexdigest()
 
         watchedDirectory[basename] = hashsum
-        if dirname not in self._watchedDirectories and not self.isExcluded(dirname) and not self._disableWatching:
+        if dirname not in self._watchedDirectories and not self.is_excluded(dirname) and not self._disableWatching:
             logging.debug("starting to watch directory %s for changes", dirname)
-            self._startWatching(dirname)
+            self._start_watching(dirname)
 
         self._watchedDirectories[dirname] = watchedDirectory
 
         logging.debug("calculated and stored hashsum %s", hashsum)
         return hashsum
 
-    def _startWatching(self, dirname: str):
+    def _start_watching(self, dirname: str):
         ev = pyuv.fs.FSEvent(self._loop)
-        ev.start(dirname, 0, self._onPathChange)
+        ev.start(dirname, 0, self._on_path_change)
         self._handlers.append(ev)
 
-    def _onPathChange(self, handle, filename, events, error):
+    def _on_path_change(self, handle, filename, events, error):
         watchedDirectory = self._watchedDirectories[handle.path]
         logging.debug("detected modifications in %s", handle.path)
         if filename in watchedDirectory:
@@ -60,7 +61,7 @@ class HashCache:
         for ev in self._handlers:
             ev.stop()
 
-    def isExcluded(self, dirname):
+    def is_excluded(self, dirname: str):
         # as long as we do not have more than _MAXCACHE regex we can
         # rely on the internal cacheing of re.match
         excluded = any(re.search(pattern, dirname, re.IGNORECASE) for pattern in self._excludePatterns)

@@ -132,6 +132,9 @@ def expand_response_file(cmdline):
     ret = []
 
     for arg in cmdline:
+        if len(arg) == 0:
+            continue
+        
         if arg[0] == "@":
             response_file = arg[1:]
             with open(response_file, "rb") as f:

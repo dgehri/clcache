@@ -29,11 +29,10 @@ def _normalize_dir(dir_path: Path) -> Path:
     return Path(result)
 
 
-# Resolve a path, if it exists.
 def _get_dir_resolved(path: Path) -> Optional[Path]:
     '''Resolve a path, if it exists.'''
     with contextlib.suppress(Exception):
-        resolved = _normalize_dir(path.resolve())
+        resolved = _normalize_dir(resolve(path))
         return resolved if resolved != path else None
 
 
@@ -222,17 +221,10 @@ def set_cached_compiler_console_output(path: Path, output: str, translate_paths=
         f.write(output.encode())
 
 
+@functools.cache
 def get_env_path_cached(env: str) -> Optional[Path]:
     '''Get a path from an environment variable, and cache the result.'''
-    if env not in get_env_path_cached.cache:
-        if value := os.getenv(env):
-            get_env_path_cached.cache[env] = Path(value).resolve()
-        else:
-            get_env_path_cached.cache[env] = None
-    return get_env_path_cached.cache[env]
-
-
-get_env_path_cached.cache = {}
+    return resolve(Path(value)) if (value := os.getenv(env)) else None
 
 
 def expand_conan_placeholder(conan_user_home: Path, path_str: str) -> Path:
@@ -263,40 +255,32 @@ def expand_conan_placeholder(conan_user_home: Path, path_str: str) -> Path:
 expand_conan_placeholder.cache = {}
 
 
+@functools.cache
 def expand_path(path: str) -> Path:
     """Expand a path, replacing placeholders with the actual values."""
-    result: Path
-    if value := expand_path.cache.get(path):
-        return value
-    elif path.startswith(BASEDIR_REPLACEMENT):
+    if path.startswith(BASEDIR_REPLACEMENT):
         if BASEDIR_STR:
-            result = Path(path.replace(
+            return Path(path.replace(
                 BASEDIR_REPLACEMENT, str(BASEDIR_STR), 1))
         else:
             raise LogicException(
                 f"No CLCACHE_BASEDIR set, but found relative path {path}"
             )
     elif path.startswith(BUILDDIR_REPLACEMENT):
-        result = Path(path.replace(BUILDDIR_REPLACEMENT, str(BUILDDIR_STR), 1))
+        return Path(path.replace(BUILDDIR_REPLACEMENT, str(BUILDDIR_STR), 1))
     elif CONAN_USER_HOME and path.startswith(CONANDIR_REPLACEMENT):
-        result = expand_conan_placeholder(CONAN_USER_HOME, path)
+        return expand_conan_placeholder(CONAN_USER_HOME, path)
     elif QT_DIR_STR and path.startswith(QTDIR_REPLACEMENT):
-        result = Path(path.replace(QTDIR_REPLACEMENT, QT_DIR_STR, 1))
+        return Path(path.replace(QTDIR_REPLACEMENT, QT_DIR_STR, 1))
     elif m := RE_ENV.match(path):
         if real_path := get_env_path_cached(m.group(1)):
-            result = real_path / path[m.end(0)+1:]
+            return real_path / path[m.end(0)+1:]
         else:
             raise LogicException(
                 f"Unable to resolve environment variable {m.group(1)}"
             )
     else:
-        result = Path(path)
-
-    expand_path.cache[path] = result
-    return result
-
-
-expand_path.cache = {}
+        return Path(path)
 
 
 def _canonicalize_base_dir(path_str: str) -> Optional[str]:
@@ -351,7 +335,7 @@ def get_conan_user_home(hint_path: Optional[Path] = None) -> Path:
         if v := os.environ.get("USERPROFILE"):
             hint_path = Path(v)
 
-    return hint_path.absolute().resolve() if hint_path else Path()
+    return resolve(hint_path.absolute()) if hint_path else Path()
 
 
 def _get_conan_user_home_re(path: Optional[Path] = None) -> re.Pattern[str]:
@@ -402,8 +386,8 @@ def _canonicalize_conan_dir(path_str: str) -> Optional[str]:
         if real_path_file.is_file():
             with open(real_path_file, "r") as f:
                 # Transform to long form
-                real_path = f.readline()
-                path_str = path_str.replace(m.group(1), real_path)
+                real_path = resolve(Path(f.readline()))
+                path_str = str(real_path / path_str[m.end()+1:])
 
     # Attempt to replace the Conan user home with the placeholder
     mapped_path, cnt = _canonicalize_conan_dir.RE_CONAN_USER_HOME.subn(
@@ -480,33 +464,20 @@ _canonicalize_qt_dir.RE_QT_DIR = re.compile(
     rf"^(.*\\Qt\\\d+\.\d+\.\d+(?=\\))", re.IGNORECASE)
 
 
+@functools.cache
 def canonicalize_path(path: Path) -> str:
     """Canonicalize a path by applying placeholder replacements."""
 
-    if path in canonicalize_path.cache:
-        return canonicalize_path.cache[path]
+    path_str = str(resolve(path)).lower()
 
-    resolved_path = resolve(path)
-    resolved_path_str = str(resolved_path).lower()
-
-    mapped_path = _canonicalize_build_dir(resolved_path_str)
-    if not mapped_path:
-        mapped_path = _canonicalize_base_dir(resolved_path_str)
-    if not mapped_path:
-        mapped_path = _canonicalize_conan_dir(resolved_path_str)
-    if not mapped_path:
-        mapped_path = _canonicalize_qt_dir(resolved_path_str)
-    if not mapped_path:
-        mapped_path = _canonicalize_toolchain_dirs(resolved_path_str)
-    if not mapped_path:
-        mapped_path = resolved_path_str
-
-    canonicalize_path.cache[path] = mapped_path
-    canonicalize_path.cache[resolved_path] = mapped_path
-    return mapped_path
-
-
-canonicalize_path.cache = {}
+    return (
+        _canonicalize_build_dir(path_str)
+        or _canonicalize_base_dir(path_str)
+        or _canonicalize_conan_dir(path_str)
+        or _canonicalize_qt_dir(path_str)
+        or _canonicalize_toolchain_dirs(path_str)
+        or path_str
+    )
 
 
 class StdStream(Enum):

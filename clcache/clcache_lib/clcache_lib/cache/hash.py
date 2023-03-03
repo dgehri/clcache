@@ -1,4 +1,6 @@
+import functools
 import hashlib
+import mmap
 import os
 import errno
 from pathlib import Path
@@ -19,7 +21,7 @@ ERROR_PIPE_BUSY = 231
 def get_compiler_hash(compiler_path: Path) -> str:
     '''
     Returns the hash of the given compiler executable.
-    
+
     The hash is based on the file modification time, file 
     size and the cache version.
     '''
@@ -31,30 +33,29 @@ def get_compiler_hash(compiler_path: Path) -> str:
             CACHE_VERSION,
         ]
     )
-    hasher = HashAlgorithm()
-    hasher.update(data.encode("UTF-8"))
-    return hasher.hexdigest()
+
+    return get_string_hash(data)
 
 
 def get_file_hashes(path_list: List[Path]) -> List[str]:
     '''
     Returns the hashes of the given files.
-    
+
     Parameters:
         path_list: The paths of the files to hash.
-        
+
     Returns:
         The hashes of the files.
     '''
     # Try fetching the hashes from the server
     if "CLCACHE_SERVER" not in os.environ:
-        return [_get_file_hash_cached(path) for path in path_list]
+        return [get_file_hash(path) for path in path_list]
 
     # If the server is not available, fall back to the local cache
-    pipeName = r"\\.\pipe\clcache_srv"
+    pipe_name = r"\\.\pipe\clcache_srv"
     while True:
         try:
-            with open(pipeName, "w+b") as f:
+            with open(pipe_name, "w+b") as f:
                 f.write("\n".join(str(path_list)).encode("utf-8"))
                 f.write(b"\x00")
                 response = f.read()
@@ -66,25 +67,12 @@ def get_file_hashes(path_list: List[Path]) -> List[str]:
                 e.errno == errno.EINVAL
                 and windll.kernel32.GetLastError() == ERROR_PIPE_BUSY
             ):
-                windll.kernel32.WaitNamedPipeW(pipeName, NMPWAIT_WAIT_FOREVER)
+                windll.kernel32.WaitNamedPipeW(pipe_name, NMPWAIT_WAIT_FOREVER)
             else:
                 raise
 
 
-def _get_file_hash_cached(path: Path) -> str:
-    '''
-    Returns the hash of the given file.
-    '''
-    if path in _get_file_hash_cached.knownHashes:
-        return _get_file_hash_cached.knownHashes[path]
-    checksum = get_file_hash(path)
-    _get_file_hash_cached.knownHashes[path] = checksum
-    return checksum
-
-
-_get_file_hash_cached.knownHashes = {}
-
-
+@functools.cache
 def get_file_hash(path: Path, toolset_data: Optional[str] = None) -> str:
     '''
     Returns the hash of the given file.
@@ -96,20 +84,24 @@ def get_file_hash(path: Path, toolset_data: Optional[str] = None) -> str:
     Returns:
         The hash of the file.
     '''
+
     hasher = HashAlgorithm()
 
     with open(path, "rb") as f:
-        src_content = f.read()
+        with mmap.mmap(f.fileno(), length=0,
+                       access=mmap.ACCESS_READ, offset=0) as mm:
 
-        # If the file is in the build directory, it may contain references 
-        # (includes, comments) to the files in the base (source) directory. 
-        # We need to replace those references with a placeholder to make the 
-        # hash independent of that information.
-        if is_in_build_dir(path):
-            # get containing folder of path
-            src_dir = path.parent
-            src_content = subst_basedir_with_placeholder(src_content,  src_dir)
-        hasher.update(src_content)
+            if not is_in_build_dir(path):
+                hasher.update(mm)
+            else:
+                # If the file is in the build directory, it may contain references
+                # (includes, comments) to the files in the base (source) directory.
+                # We need to replace those references with a placeholder to make the
+                # hash independent of that information.
+                src_dir = path.parent  # get containing folder of path
+                src_content = subst_basedir_with_placeholder(
+                    mm.read(),  src_dir)
+                hasher.update(src_content)
 
     # trace(f"File hash: {filePath} => {hasher.hexdigest()}", 2)
 
@@ -123,7 +115,7 @@ def get_file_hash(path: Path, toolset_data: Optional[str] = None) -> str:
     return hasher.hexdigest()
 
 
-def get_string_hash(dataString):
+def get_string_hash(data: str):
     hasher = HashAlgorithm()
-    hasher.update(dataString.encode("UTF-8"))
+    hasher.update(data.encode("UTF-8"))
     return hasher.hexdigest()

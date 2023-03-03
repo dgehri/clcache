@@ -1,3 +1,5 @@
+import functools
+import mmap
 from pathlib import Path
 import sys
 import threading
@@ -20,24 +22,14 @@ def print_locked(stream, str: str):
         stream.flush()
 
 
+@functools.cache
 def resolve(path: Path) -> Path:
-    '''
-    Resolve a path, caching the result for future calls.
-    '''
-    if path in resolve.cache:
-        return resolve.cache[path]
+    '''Resolve a path, caching the result for future calls.'''
 
     try:
-        result = path.resolve()
-        resolve.cache[path] = result
-        resolve.cache[result] = result
-        return result
+        return path.resolve()
     except Exception:
-        resolve.cache[path] = path
         return path
-
-
-resolve.cache = {}
 
 
 def files_beneath(base_dir: Path) -> Generator[Path, None, None]:
@@ -113,24 +105,48 @@ def find_compiler_binary() -> Optional[Path]:
     return Path(p) if (p := which("cl.exe")) else None
 
 
-def copy_or_link(src_file_path: Path, dst_file_path: Path, write_to_cache=False) -> int:
+def copy_from_cache(src_file_path: Path, dst_file_path: Path) -> int:
+    '''
+    Copy a file from the cache.
+
+    Parameters:
+        src_file_path: Path to the source file.
+        dst_file_path: Path to the destination file.
+    '''
     ensure_dir_exists(dst_file_path.absolute().parent)
 
     temp_dst = dst_file_path.parent / f"{dst_file_path.name}.tmp"
 
-    if write_to_cache is True:
-        dst_file_path = dst_file_path.parent / f"{dst_file_path.name}.lz4"
-        with open(src_file_path, "rb") as file_in, lz4.frame.open(
-            temp_dst, mode="wb"
-        ) as file_out:
-            copyfileobj(file_in, file_out)  # type: ignore
-    elif os.path.exists(f"{src_file_path}.lz4"):
-        with lz4.frame.open(f"{src_file_path}.lz4", mode="rb") as file_in, open(
-            temp_dst, "wb"
-        ) as file_out:
-            copyfileobj(file_in, file_out)  # type: ignore
+    if os.path.exists(f"{src_file_path}.lz4"):
+        '''Read from cache'''
+        with lz4.frame.open(f"{src_file_path}.lz4", mode="rb") as file_in:
+            with mmap.mmap(file_in.fileno(), 0, access=mmap.ACCESS_READ) as mm:
+                with open(temp_dst, "wb") as file_out:
+                    copyfileobj(mm, file_out)  # type: ignore
     else:
+        '''Copy file'''
         copyfile(src_file_path, temp_dst)
+
+    temp_dst.replace(dst_file_path)
+    return dst_file_path.stat().st_size
+
+
+def copy_to_cache(src_file_path: Path, dst_file_path: Path) -> int:
+    '''
+    Copy a file to the cache.
+
+    Parameters:
+        src_file_path: Path to the source file.
+        dst_file_path: Path to the destination file.
+    '''
+    ensure_dir_exists(dst_file_path.absolute().parent)
+
+    temp_dst = dst_file_path.parent / f"{dst_file_path.name}.tmp"
+
+    with open(src_file_path, "rb") as file_in:
+        with mmap.mmap(file_in.fileno(), 0, access=mmap.ACCESS_READ) as mm:
+            with lz4.frame.open(temp_dst, mode="wb") as file_out:
+                copyfileobj(mm, file_out)  # type: ignore
 
     temp_dst.replace(dst_file_path)
     return dst_file_path.stat().st_size

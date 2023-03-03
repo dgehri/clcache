@@ -103,7 +103,7 @@ def process_cache_hit(cache: Cache, is_local: bool, obj_file: Path, cache_key: s
         cached_artifacts = cache.get_entry(cache_key)
         assert cached_artifacts is not None
 
-        copy_or_link(cached_artifacts.obj_file_path, obj_file)
+        copy_from_cache(cached_artifacts.obj_file_path, obj_file)
         trace("Finished. Exit code 0")
         return (
             0,

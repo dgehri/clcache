@@ -6,13 +6,13 @@ from typing import Optional, Tuple
 from .stats import CacheStats, HitReason, MissReason, PersistentStats, Stats
 from ..utils.util import trace
 from .file_cache import CacheFileStrategy, CompilerArtifacts
-from .remote_cache import CacheFileWithCouchbaseFallbackStrategy
 
 
 class Cache:
     def __init__(self, cache_dir: Optional[Path] = None):
         if url := os.environ.get("CLCACHE_COUCHBASE"):
             try:
+                from .remote_cache import CacheFileWithCouchbaseFallbackStrategy
                 self.strategy = CacheFileWithCouchbaseFallbackStrategy(
                     url, cacheDirectory=cache_dir)
                 return

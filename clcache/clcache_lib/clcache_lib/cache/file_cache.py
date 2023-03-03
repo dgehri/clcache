@@ -108,8 +108,8 @@ class ManifestSection:
         if not manifest_file.exists():
             return None
         try:
-            with open(manifest_file, "r") as inFile:
-                doc = json.load(inFile)
+            with open(manifest_file, "r") as in_file:
+                doc = json.load(in_file)
                 return Manifest(
                     [
                         ManifestEntry(
@@ -318,7 +318,7 @@ class CompilerArtifactsSection:
         size = 0
         if artifacts.obj_file_path is not None:
             dst_file_path = temp_entry_dir / CompilerArtifactsSection.OBJECT_FILE
-            size = copy_or_link(artifacts.obj_file_path, dst_file_path, True)
+            size = copy_to_cache(artifacts.obj_file_path, dst_file_path)
         set_cached_compiler_console_output(
             temp_entry_dir / CompilerArtifactsSection.STDOUT_FILE,
             artifacts.stdout,
