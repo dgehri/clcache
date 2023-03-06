@@ -1,5 +1,4 @@
 import functools
-import mmap
 from pathlib import Path
 import sys
 import threading
@@ -105,7 +104,7 @@ def find_compiler_binary() -> Optional[Path]:
     return Path(p) if (p := which("cl.exe")) else None
 
 
-def copy_from_cache(src_file_path: Path, dst_file_path: Path) -> int:
+def copy_from_cache(src_file: Path, dst_file: Path):
     '''
     Copy a file from the cache.
 
@@ -113,22 +112,18 @@ def copy_from_cache(src_file_path: Path, dst_file_path: Path) -> int:
         src_file_path: Path to the source file.
         dst_file_path: Path to the destination file.
     '''
-    ensure_dir_exists(dst_file_path.absolute().parent)
+    ensure_dir_exists(dst_file.absolute().parent)
 
-    temp_dst = dst_file_path.parent / f"{dst_file_path.name}.tmp"
+    temp_dst: Path = dst_file.parent / f"{dst_file.name}.tmp"
 
-    if os.path.exists(f"{src_file_path}.lz4"):
-        '''Read from cache'''
-        with lz4.frame.open(f"{src_file_path}.lz4", mode="rb") as file_in:
-            with mmap.mmap(file_in.fileno(), 0, access=mmap.ACCESS_READ) as mm:
-                with open(temp_dst, "wb") as file_out:
-                    copyfileobj(mm, file_out)  # type: ignore
+    if os.path.exists(f"{src_file}.lz4"):
+        with lz4.frame.open(f"{src_file}.lz4", mode="rb") as file_in:
+            with open(temp_dst, "wb") as file_out:
+                copyfileobj(file_in, file_out)  # type: ignore
     else:
-        '''Copy file'''
-        copyfile(src_file_path, temp_dst)
+        copyfile(src_file, temp_dst)
 
-    temp_dst.replace(dst_file_path)
-    return dst_file_path.stat().st_size
+    temp_dst.replace(dst_file)
 
 
 def copy_to_cache(src_file_path: Path, dst_file_path: Path) -> int:
@@ -138,15 +133,17 @@ def copy_to_cache(src_file_path: Path, dst_file_path: Path) -> int:
     Parameters:
         src_file_path: Path to the source file.
         dst_file_path: Path to the destination file.
+
+    Returns:
+        The size of the file in bytes, after compression.
     '''
-    ensure_dir_exists(dst_file_path.absolute().parent)
+    ensure_dir_exists(dst_file_path.parent)
 
-    temp_dst = dst_file_path.parent / f"{dst_file_path.name}.tmp"
-
+    temp_dst: Path = dst_file_path.parent / f"{dst_file_path.name}.tmp"
+    dst_file_path = dst_file_path.parent / f"{dst_file_path.name}.lz4"
     with open(src_file_path, "rb") as file_in:
-        with mmap.mmap(file_in.fileno(), 0, access=mmap.ACCESS_READ) as mm:
-            with lz4.frame.open(temp_dst, mode="wb") as file_out:
-                copyfileobj(mm, file_out)  # type: ignore
+        with lz4.frame.open(temp_dst, mode="wb") as file_out:
+            copyfileobj(file_in, file_out)  # type: ignore
 
     temp_dst.replace(dst_file_path)
     return dst_file_path.stat().st_size

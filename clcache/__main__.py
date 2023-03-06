@@ -216,6 +216,14 @@ def schedule_jobs(
 ) -> int:
     '''
     Schedule jobs for the given command line.
+    
+    Parameters:
+        cache: The cache to use.
+        compiler: The compiler to use.
+        cmd_line: The command line to process.
+        environment: The environment to use.
+        src_files: The source files to process. Each tuple contains the path to the source file and the language.
+        obj_files: The object files to process.
     '''
     # Filter out all source files from the command line to form base_cmdline
     base_cmdline = [

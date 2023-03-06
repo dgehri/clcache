@@ -1,6 +1,5 @@
 import functools
 import hashlib
-import mmap
 import os
 import errno
 from pathlib import Path
@@ -12,6 +11,7 @@ from ..config import CACHE_VERSION
 from .virt import subst_basedir_with_placeholder, is_in_build_dir
 
 HashAlgorithm = hashlib.md5
+BUFFER_SIZE = 65536
 
 # Define some Win32 API constants here to avoid dependency on win32pipe
 NMPWAIT_WAIT_FOREVER = wintypes.DWORD(0xFFFFFFFF)
@@ -88,20 +88,19 @@ def get_file_hash(path: Path, toolset_data: Optional[str] = None) -> str:
     hasher = HashAlgorithm()
 
     with open(path, "rb") as f:
-        with mmap.mmap(f.fileno(), length=0,
-                       access=mmap.ACCESS_READ, offset=0) as mm:
-
-            if not is_in_build_dir(path):
-                hasher.update(mm)
-            else:
-                # If the file is in the build directory, it may contain references
-                # (includes, comments) to the files in the base (source) directory.
-                # We need to replace those references with a placeholder to make the
-                # hash independent of that information.
-                src_dir = path.parent  # get containing folder of path
-                src_content = subst_basedir_with_placeholder(
-                    mm.read(),  src_dir)
-                hasher.update(src_content)
+        if not is_in_build_dir(path):
+            b = f.read(BUFFER_SIZE)
+            while len(b) > 0:
+                hasher.update(b)
+                b = f.read(BUFFER_SIZE)
+        else:
+            # If the file is in the build directory, it may contain references
+            # (includes, comments) to the files in the base (source) directory.
+            # We need to replace those references with a placeholder to make the
+            # hash independent of that information.
+            src_dir = path.parent  # get containing folder of path
+            src_content = subst_basedir_with_placeholder(f.read(),  src_dir)
+            hasher.update(src_content)
 
     # trace(f"File hash: {filePath} => {hasher.hexdigest()}", 2)
 
