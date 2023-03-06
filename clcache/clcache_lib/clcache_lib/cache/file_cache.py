@@ -487,13 +487,11 @@ class CacheFileStrategy:
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        self.persistent_stats.combine_with(self.current_stats)
-        self.persistent_stats.save()
+        self.persistent_stats.save_combined(self.current_stats)
         
         # also save the current stats to the build directory
         build_stats = PersistentStats(Path(BUILDDIR_STR) / "clcache.json")
-        build_stats.combine_with(self.current_stats)
-        build_stats.save()
+        build_stats.save_combined(self.current_stats)
 
     @property
     @contextlib.contextmanager
@@ -576,7 +574,6 @@ class CacheFileStrategy:
         (new_count, new_size,) = self.compiler_artifacts_repository.clean(
             int(max_objects_size))
 
-        self.persistent_stats.set_cache_size(new_size + new_manif_size)
+        self.persistent_stats.set_cache_size_and_entries(new_size + new_manif_size, new_count)
         self.current_stats.clear_cache_size()
-        self.persistent_stats.set_cache_entries(new_count)
         self.current_stats.clear_cache_entries()

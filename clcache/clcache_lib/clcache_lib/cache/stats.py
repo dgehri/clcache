@@ -1,6 +1,7 @@
 from enum import Enum
 from pathlib import Path
 from collections import defaultdict
+from typing import Dict
 from .persistent_json_dict import PersistentJsonDict
 
 
@@ -64,8 +65,8 @@ class PersistentStats:
         self._file_name = file_name
         self._dict = PersistentJsonDict(self._file_name)
 
-    def save(self):
-        self._dict.save()
+    def save_combined(self, other: Stats):
+        self._dict.save_combined(other._stats)
 
     def get(self, enum_key) -> int:
         return self._dict[enum_key.value]
@@ -79,20 +80,21 @@ class PersistentStats:
     def cache_size(self) -> int:
         return self.get(CacheStats.CACHE_SIZE)
 
-    def set_cache_size(self, size: int):
-        self._dict[CacheStats.CACHE_SIZE.value] = size
+    def set_cache_size_and_entries(self, size: int, entries: int):
+        def callback(d: Dict[str, int]) -> Dict[str, int]:
+            d[CacheStats.CACHE_SIZE.value] = size
+            d[CacheStats.CACHE_ENTRIES.value] = entries
+            return d
 
-    def set_cache_entries(self, entries: int):
-        self._dict[CacheStats.CACHE_ENTRIES.value] = entries
-
-    def combine_with(self, stats: Stats):
-        # Merge stats into our own
-        for key, value in stats._stats.items():
-            self._dict[key] += value
+        self._dict.save(callback)
 
     def reset(self):
-        for attribute in MissReason:
-            self._dict[attribute.value] = 0
+        def callback(d: Dict[str, int]) -> Dict[str, int]:
+            for attribute in MissReason:
+                d[attribute.value] = 0
 
-        for attribute in HitReason:
-            self._dict[attribute.value] = 0
+            for attribute in HitReason:
+                d[attribute.value] = 0
+            return d
+
+        self._dict.save(callback)
