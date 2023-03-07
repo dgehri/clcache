@@ -67,36 +67,39 @@ class Manifest:
 
 
 class ManifestSection:
-    def __init__(self, manifestSectionDir: Path):
-        self.manifestSectionDir: Path = manifestSectionDir
+    def __init__(self, manifest_section_dir: Path):
+        self.manifestSectionDir: Path = manifest_section_dir
         self.lock = CacheLock.for_path(self.manifestSectionDir)
 
-    def manifest_path(self, manifestHash: str) -> Path:
-        return self.manifestSectionDir / f"{manifestHash}.json"
+    def manifest_path(self, manifest_hash: str) -> Path:
+        return self.manifestSectionDir / f"{manifest_hash}.json"
 
     def manifest_files(self) -> Generator[Path, None, None]:
         return files_beneath(self.manifestSectionDir)
 
-    def set_manifest(self, manifestHash: str, manifest: Manifest) -> int:
+    def set_manifest(self, manifest_hash: str, manifest: Manifest) -> int:
         '''Writes manifest to disk and returns the size of the manifest file'''
-        manifest_path = self.manifest_path(manifestHash)
+        manifest_path = self.manifest_path(manifest_hash)
         trace(
-            f"Writing manifest with manifestHash = {manifestHash} to {manifest_path}")
+            f"Writing manifest with manifestHash = {manifest_hash} to {manifest_path}")
         ensure_dir_exists(self.manifestSectionDir)
 
-        # Retry writing manifest file in case of concurrent access
-        for i in range(60):
+        # Retry writing manifest file in case of concurrent
+        # access (TODO: verify if this is still needed)
+        for i in range(10):
             try:
-                with atomic_write(manifest_path, overwrite=True) as outFile:
+                with atomic_write(manifest_path, overwrite=True) as out_file:
                     # Converting namedtuple to JSON via OrderedDict preserves key names and keys order
                     entries = [e._asdict() for e in manifest.entries()]
                     jsonobject = {"entries": entries}
-                    json.dump(jsonobject, outFile, sort_keys=True, indent=2)
-                    return manifest_path.stat().st_size
-            except Exception:
-                if i == 59:
+                    json.dump(jsonobject, out_file, sort_keys=True, indent=2)
+                    
+                # Return the size of the manifest file (warning: don't move inside the with block!)
+                return manifest_path.stat().st_size
+            except Exception as e:
+                if i == 9:
                     raise
-                time.sleep(1)
+                time.sleep(0.5)
         assert False, "unreachable"
 
     def get_manifest(self, manifest_hash: str) -> Optional[Tuple[Manifest, int]]:
@@ -144,16 +147,16 @@ class ManifestRepository:
     # again due to a new manifest hash and is cleaned away after some time.
     MANIFEST_FILE_FORMAT_VERSION = 6
 
-    def __init__(self, manifestsRootDir: Path):
-        self._manifestsRootDir: Path = manifestsRootDir
+    def __init__(self, manifest_root_dir: Path):
+        self._manifestsRootDir: Path = manifest_root_dir
 
-    def section(self, manifestHash: str) -> ManifestSection:
-        return ManifestSection(self._manifestsRootDir / manifestHash[:2])
+    def section(self, manifest_hash: str) -> ManifestSection:
+        return ManifestSection(self._manifestsRootDir / manifest_hash[:2])
 
     def sections(self) -> Generator[ManifestSection, None, None]:
         return (ManifestSection(path) for path in child_dirs(self._manifestsRootDir))
 
-    def clean(self, maxManifestsSize: int) -> int:
+    def clean(self, max_manifest_size: int) -> int:
         '''
         Removes old manifest files until the total size of the remaining manifest files is less than maxManifestsSize.
 
@@ -163,20 +166,20 @@ class ManifestRepository:
         Returns:
             The total size of the remaining manifest files in bytes.
         '''
-        manifestFileInfos = []
+        manifest_file_infos = []
         for section in self.sections():
-            for filePath in section.manifest_files():
+            for file_path in section.manifest_files():
                 with contextlib.suppress(OSError):
-                    manifestFileInfos.append((os.stat(filePath), filePath))
-        manifestFileInfos.sort(key=lambda t: t[0].st_atime, reverse=True)
+                    manifest_file_infos.append((os.stat(file_path), file_path))
+        manifest_file_infos.sort(key=lambda t: t[0].st_atime, reverse=True)
 
-        remainingObjectsSize = 0
-        for stat, filepath in manifestFileInfos:
-            if remainingObjectsSize + stat.st_size <= maxManifestsSize:
-                remainingObjectsSize += stat.st_size
+        remaining_obj_size = 0
+        for stat, filepath in manifest_file_infos:
+            if remaining_obj_size + stat.st_size <= max_manifest_size:
+                remaining_obj_size += stat.st_size
             else:
                 os.remove(filepath)
-        return remainingObjectsSize
+        return remaining_obj_size
 
     @staticmethod
     def get_manifest_hash(compiler_path: Path, cmd_line: List[str], src_file: Path) -> str:
@@ -408,9 +411,9 @@ class CompilerArtifactsRepository:
             for path in child_dirs(self._compilerArtifactsRootDir)
         )
 
-    def removeEntry(self, keyToBeRemoved):
-        compilerArtifactsDir = self.section(keyToBeRemoved).cache_entry_dir(
-            keyToBeRemoved
+    def remove_entry(self, key: str):
+        compilerArtifactsDir = self.section(key).cache_entry_dir(
+            key
         )
         rmtree(compilerArtifactsDir, ignore_errors=True)
 
@@ -440,7 +443,7 @@ class CompilerArtifactsRepository:
 
         removed_items = 0
         for atime, size, cachekey in object_infos:
-            self.removeEntry(cachekey)
+            self.remove_entry(cachekey)
             removed_items += 1
             current_size_objs -= size
             if current_size_objs < max_compiler_artifacts_size:

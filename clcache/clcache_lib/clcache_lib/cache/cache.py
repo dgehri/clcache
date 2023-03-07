@@ -96,19 +96,30 @@ def clear_cache(cache: Cache):
 
 
 def add_object_to_cache(cache: Cache,
-                        cachekey: str,
+                        cache_key: str,
                         artifacts: CompilerArtifacts,
+                        reason: MissReason,
                         action: Optional[Callable[[], int]] = None):
-    # This function asserts that the caller locked 'section' and 'stats'
-    # already and also saves them
-    size = cache.set_entry(cachekey, artifacts)
-    if size is None:
-        size = os.path.getsize(artifacts.obj_file_path)
-            
+
+    size = 0
+
+    with cache.lock_for(cache_key):
+        hit, _ = cache.has_entry(cache_key)
+        # If the cache entry is not present, add it.
+        if not hit:
+            cache.statistics.record_cache_miss(reason)
+
+            size = cache.set_entry(cache_key, artifacts)
+            if size is None:
+                size = os.path.getsize(artifacts.obj_file_path)
+
+            cache.statistics.register_cache_entry()
+
     if action:
+        # Always execute the action, even if the cache entry was present.
         size += action()
 
-    cache.statistics.register_cache_entry(size)
+    cache.statistics.register_cache_entry_size(size)
 
 
 def is_cache_cleanup_required(cache: Cache):

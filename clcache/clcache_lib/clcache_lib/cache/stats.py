@@ -6,8 +6,8 @@ from .persistent_json_dict import PersistentJsonDict
 
 
 class MissReason(Enum):
-    HEADER_CHANGED_MISS = "HeaderChangedMisses" # Header file changed
-    SOURCE_CHANGED_MISS = "SourceChangedMisses" # Source file changed
+    HEADER_CHANGED_MISS = "HeaderChangedMisses"  # Header file changed
+    SOURCE_CHANGED_MISS = "SourceChangedMisses"  # Source file changed
     CALL_WITH_INVALID_ARGUMENT = "CallsWithInvalidArgument"
     CALL_WITHOUT_SOURCE_FILE = "CallsWithoutSourceFile"
     CALL_WITH_MULTIPLE_SOURCE_FILES = "CallsWithMultipleSourceFiles"
@@ -39,9 +39,12 @@ class Stats:
         '''Record a cache hit'''
         self._stats[reason.value] += 1
 
-    def register_cache_entry(self, size):
+    def register_cache_entry(self):
         '''Register a new cache entry'''
         self._stats[CacheStats.CACHE_ENTRIES.value] += 1
+
+    def register_cache_entry_size(self, size: int):
+        '''Register the size of a new cache entry'''
         self._stats[CacheStats.CACHE_SIZE.value] += size
 
     def unregister_cache_entry(self, size):

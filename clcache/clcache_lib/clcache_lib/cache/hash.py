@@ -89,10 +89,8 @@ def get_file_hash(path: Path, toolset_data: Optional[str] = None) -> str:
 
     with open(path, "rb") as f:
         if not is_in_build_dir(path):
-            b = f.read(BUFFER_SIZE)
-            while len(b) > 0:
-                hasher.update(b)
-                b = f.read(BUFFER_SIZE)
+            while chunk := f.read(128 * hasher.block_size):
+                hasher.update(chunk)
         else:
             # If the file is in the build directory, it may contain references
             # (includes, comments) to the files in the base (source) directory.

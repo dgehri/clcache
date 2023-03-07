@@ -405,11 +405,11 @@ def process(cache: Cache, obj_file: Path,
         compiler_result = (
             compiler_result[0], compiler_output, compiler_result[2])
 
-        with cache.manifest_lock_for(manifest_hash):
-            entry = create_manifest_entry(manifest_hash, include_paths)
-            cachekey = entry.objectHash
+        entry = create_manifest_entry(manifest_hash, include_paths)
+        cachekey = entry.objectHash
 
-            def add_manifest() -> int:
+        def add_manifest() -> int:
+            with cache.manifest_lock_for(manifest_hash):
                 if manifest_info := cache.get_manifest(manifest_hash):
                     manifest, old_size = manifest_info
                 else:
@@ -420,14 +420,14 @@ def process(cache: Cache, obj_file: Path,
                 new_size = cache.set_manifest(manifest_hash, manifest)
                 return new_size - old_size
 
-            return ensure_artifacts_exist(
-                cache,
-                cachekey,
-                miss_reason,
-                obj_file,
-                compiler_result,
-                add_manifest,
-            )
+        return ensure_artifacts_exist(
+            cache,
+            cachekey,
+            miss_reason,
+            obj_file,
+            compiler_result,
+            add_manifest,
+        )
 
 
 def ensure_artifacts_exist(cache: Cache, cache_key: str,
@@ -445,30 +445,25 @@ def ensure_artifacts_exist(cache: Cache, cache_key: str,
         reason (Callable[[Statistics], None]): The reason for the cache miss.
         obj_file (Path): The object file to create.
         compiler_result (Tuple[int, str, str]): The result of the compiler invocation.
-        action (Callable[[], None]): An optional action to perform if the artifacts are missing.
+        action (Callable[[], None]): An optional action to perform unconditionally.
 
     Returns:
         Tuple[int, str, str]: A tuple containing the exit code, stdout and stderr.
     '''
     return_code, compiler_stdout, compiler_stderr = compiler_result
-    compile_success = return_code == 0 and os.path.exists(obj_file)
-    with cache.lock_for(cache_key):
-        hit, _ = cache.has_entry(cache_key)
-        if not hit:
-            cache.statistics.record_cache_miss(reason)
-            if compile_success:
+    if return_code == 0 and obj_file.exists():
+        artifacts = CompilerArtifacts(
+            obj_file,
+            canonicalize_compile_output(
+                compiler_stdout, StdStream.STDOUT),
+            canonicalize_compile_output(
+                compiler_stderr, StdStream.STDERR),
+        )
 
-                artifacts = CompilerArtifacts(
-                    obj_file,
-                    canonicalize_compile_output(
-                        compiler_stdout, StdStream.STDOUT),
-                    canonicalize_compile_output(
-                        compiler_stderr, StdStream.STDERR),
-                )
+        trace(
+            f"Adding file {artifacts.obj_file_path} to cache using key {cache_key}")
 
-                trace(
-                    f"Adding file {artifacts.obj_file_path} to cache using key {cache_key}")
-                add_object_to_cache(cache, cache_key, artifacts, action)
+        add_object_to_cache(cache, cache_key, artifacts, reason, action)
 
     return return_code, compiler_stdout, compiler_stderr
 
