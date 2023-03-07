@@ -77,34 +77,31 @@ class ManifestSection:
     def manifest_files(self) -> Generator[Path, None, None]:
         return files_beneath(self.manifestSectionDir)
 
-    def set_manifest(self, manifestHash: str, manifest: Manifest):
-        manifestPath = self.manifest_path(manifestHash)
+    def set_manifest(self, manifestHash: str, manifest: Manifest) -> int:
+        '''Writes manifest to disk and returns the size of the manifest file'''
+        manifest_path = self.manifest_path(manifestHash)
         trace(
-            f"Writing manifest with manifestHash = {manifestHash} to {manifestPath}")
+            f"Writing manifest with manifestHash = {manifestHash} to {manifest_path}")
         ensure_dir_exists(self.manifestSectionDir)
 
-        success = False
-        for _ in range(60):
+        # Retry writing manifest file in case of concurrent access
+        for i in range(60):
             try:
-                with atomic_write(manifestPath, overwrite=True) as outFile:
+                with atomic_write(manifest_path, overwrite=True) as outFile:
                     # Converting namedtuple to JSON via OrderedDict preserves key names and keys order
                     entries = [e._asdict() for e in manifest.entries()]
                     jsonobject = {"entries": entries}
                     json.dump(jsonobject, outFile, sort_keys=True, indent=2)
-                    success = True
-                    break
+                    return manifest_path.stat().st_size
             except Exception:
+                if i == 59:
+                    raise
                 time.sleep(1)
+        assert False, "unreachable"
 
-        if not success:
-            with atomic_write(manifestPath, overwrite=True) as outFile:
-                # Converting namedtuple to JSON via OrderedDict preserves key names and keys order
-                entries = [e._asdict() for e in manifest.entries()]
-                jsonobject = {"entries": entries}
-                json.dump(jsonobject, outFile, sort_keys=True, indent=2)
-
-    def get_manifest(self, manifestHash: str) -> Optional[Manifest]:
-        manifest_file = self.manifest_path(manifestHash)
+    def get_manifest(self, manifest_hash: str) -> Optional[Tuple[Manifest, int]]:
+        '''Reads manifest from disk and returns the size of the manifest file'''
+        manifest_file = self.manifest_path(manifest_hash)
         if not manifest_file.exists():
             return None
         try:
@@ -119,7 +116,7 @@ class ManifestSection:
                         )
                         for e in doc["entries"]
                     ]
-                )
+                ), manifest_file.stat().st_size
         except IOError:
             return None
         except (ValueError, KeyError):
@@ -250,10 +247,10 @@ class ManifestRepository:
     @staticmethod
     def get_includes_content_hash_for_files(includes: List[Path]) -> str:
         try:
-            listOfHashes = get_file_hashes(includes)
+            list_of_hashes = get_file_hashes(includes)
         except FileNotFoundError as e:
             raise IncludeNotFoundException from e
-        return ManifestRepository.get_includes_content_hash_for_hashes(listOfHashes)
+        return ManifestRepository.get_includes_content_hash_for_hashes(list_of_hashes)
 
     @staticmethod
     def get_includes_content_hash_for_hashes(hashes: List[str]) -> str:
@@ -316,18 +313,27 @@ class CompilerArtifactsSection:
 
         remove_and_recreate_dir(temp_entry_dir)
         size = 0
+
+        # Write the object file to file
         if artifacts.obj_file_path is not None:
             dst_file_path = temp_entry_dir / CompilerArtifactsSection.OBJECT_FILE
             size = copy_to_cache(artifacts.obj_file_path, dst_file_path)
+
+        # Write the stdout to file
         set_cached_compiler_console_output(
             temp_entry_dir / CompilerArtifactsSection.STDOUT_FILE,
             artifacts.stdout,
         )
+        size += len(artifacts.stdout)
+
+        # Write the stderr to file
         if artifacts.stderr != "":
             set_cached_compiler_console_output(temp_entry_dir / CompilerArtifactsSection.STDERR_FILE,
                                                artifacts.stderr,
                                                True,
                                                )
+            size += len(artifacts.stderr)
+
         # Replace the full cache entry atomically
         os.replace(temp_entry_dir, cache_entry_dir)
         return size
@@ -488,7 +494,7 @@ class CacheFileStrategy:
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.persistent_stats.save_combined(self.current_stats)
-        
+
         # also save the current stats to the build directory
         build_stats = PersistentStats(Path(BUILDDIR_STR) / "clcache.json")
         build_stats.save_combined(self.current_stats)
@@ -539,13 +545,13 @@ class CacheFileStrategy:
         '''
         return self.compiler_artifacts_repository.section(cachekey).has_entry(cachekey)
 
-    def set_manifest(self, manifestHash, manifest):
-        self.manifests_repository.section(manifestHash).set_manifest(
-            manifestHash, manifest
+    def set_manifest(self, manifest_hash: str, manifest: Manifest) -> int:
+        return self.manifests_repository.section(manifest_hash).set_manifest(
+            manifest_hash, manifest
         )
 
-    def get_manifest(self, manifestHash):
-        return self.manifests_repository.section(manifestHash).get_manifest(manifestHash)
+    def get_manifest(self, manifest_hash: str) -> Optional[Tuple[Manifest, int]]:
+        return self.manifests_repository.section(manifest_hash).get_manifest(manifest_hash)
 
     def clear(self):
         self._clean(0)
@@ -574,6 +580,7 @@ class CacheFileStrategy:
         (new_count, new_size,) = self.compiler_artifacts_repository.clean(
             int(max_objects_size))
 
-        self.persistent_stats.set_cache_size_and_entries(new_size + new_manif_size, new_count)
+        self.persistent_stats.set_cache_size_and_entries(
+            new_size + new_manif_size, new_count)
         self.current_stats.clear_cache_size()
         self.current_stats.clear_cache_entries()

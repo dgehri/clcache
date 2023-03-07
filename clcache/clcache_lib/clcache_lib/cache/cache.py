@@ -1,7 +1,7 @@
 import contextlib
 import os
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Callable, Optional, Tuple
 
 from .stats import CacheStats, HitReason, MissReason, PersistentStats, Stats
 from ..utils.util import trace
@@ -78,11 +78,11 @@ class Cache:
         '''
         return self.strategy.has_entry(cachekey)
 
-    def set_manifest(self, manifestHash, manifest):
-        self.strategy.set_manifest(manifestHash, manifest)
+    def set_manifest(self, manifest_hash, manifest):
+        return self.strategy.set_manifest(manifest_hash, manifest)
 
-    def get_manifest(self, manifestHash):
-        return self.strategy.get_manifest(manifestHash)
+    def get_manifest(self, manifest_hash):
+        return self.strategy.get_manifest(manifest_hash)
 
 
 def clean_cache(cache: Cache):
@@ -95,12 +95,18 @@ def clear_cache(cache: Cache):
         cache.clear()
 
 
-def add_object_to_cache(cache: Cache, cachekey: str, artifacts: CompilerArtifacts):
+def add_object_to_cache(cache: Cache,
+                        cachekey: str,
+                        artifacts: CompilerArtifacts,
+                        action: Optional[Callable[[], int]] = None):
     # This function asserts that the caller locked 'section' and 'stats'
     # already and also saves them
     size = cache.set_entry(cachekey, artifacts)
     if size is None:
         size = os.path.getsize(artifacts.obj_file_path)
+            
+    if action:
+        size += action()
 
     cache.statistics.register_cache_entry(size)
 

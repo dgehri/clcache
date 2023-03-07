@@ -323,27 +323,40 @@ def process(cache: Cache, obj_file: Path,
             src_file (Path): The source file to compile.
 
         Returns:
-            Tuple[int, str, str, bool]: A tuple containing the exit code, stdout, stderr
-
+            Tuple[int, str, str]: A tuple containing the exit code, stdout, stderr
     '''
+
+    # Get manifest hash
     manifest_hash: str = ManifestRepository.get_manifest_hash(
         compiler, cmdline, src_file)
-    manifest_hit = None
+
+    manifest_hit = False
     cachekey = None
+
     with cache.manifest_lock_for(manifest_hash):
-        if manifest := cache.get_manifest(manifest_hash):
+        # Get the manifest for the manifest hash (if it exists)
+        if manifest_info := cache.get_manifest(manifest_hash):
+            manifest, _ = manifest_info
+
+            # Check if manifest entry exists
             for entry_index, entry in enumerate(manifest.entries()):
+
                 # NOTE: command line options already included in hash for manifest name
                 with contextlib.suppress(IncludeNotFoundException):
-                    includesContentHash = (
+
+                    # Get hash of include files
+                    includes_content_hash = (
                         ManifestRepository.get_includes_content_hash_for_files(
                             [expand_path(path) for path in entry.includeFiles]
                         )
                     )
 
-                    if entry.includesContentHash == includesContentHash:
+                    # Check if include files have changed
+                    if entry.includesContentHash == includes_content_hash:
+
+                        # Include files have not changed
                         cachekey = entry.objectHash
-                        assert cachekey is not None
+
                         if entry_index > 0:
                             # Move manifest entry to the top of the entries in the manifest
                             manifest.touch_entry(cachekey)
@@ -353,61 +366,75 @@ def process(cache: Cache, obj_file: Path,
                         with cache.lock_for(cachekey):
                             hit, is_local = cache.has_entry(cachekey)
                             if hit:
+                                # Cache hit!
                                 return process_cache_hit(cache, is_local, obj_file, cachekey)
 
             miss_reason = MissReason.HEADER_CHANGED_MISS
         else:
             miss_reason = MissReason.SOURCE_CHANGED_MISS
 
-    strip_includes = None
-    if manifest_hit is None:
+    # If we get here, we have a cache miss
+
+    if manifest_hit:
+        # Invoke real compiler and get output
+        compiler_result: Tuple[int, str, str] = invoke_real_compiler(
+            compiler, cmdline, capture_output=True)
+        
+        with cache.manifest_lock_for(manifest_hash):
+            assert cachekey is not None
+            return ensure_artifacts_exist(
+                cache, cachekey, miss_reason, obj_file, compiler_result
+            )
+    else:        
         strip_includes = False
         if "/showIncludes" not in cmdline:
+            # Ensure compiler dumps include files, but strip them 
+            # before printing to stdout, unless /showIncludes is used
             cmdline = list(cmdline)
             cmdline.insert(0, "/showIncludes")
             strip_includes = True
 
-    compiler_result: Tuple[int, str, str] = invoke_real_compiler(
-        compiler, cmdline, capture_output=True)
-
-    include_paths: List[Path] = []
-
-    if manifest_hit is None and strip_includes is not None:
+        # Invoke real compiler and get output
+        compiler_result: Tuple[int, str, str] = invoke_real_compiler(
+            compiler, cmdline, capture_output=True)
+            
+        # Create manifest entry
         include_paths, compiler_output = parse_includes_set(
             compiler_result[1], src_file, strip_includes
         )
         compiler_result = (
             compiler_result[0], compiler_output, compiler_result[2])
 
-    with cache.manifest_lock_for(manifest_hash):
-        if manifest_hit is not None and cachekey is not None:
+        with cache.manifest_lock_for(manifest_hash):
+            entry = create_manifest_entry(manifest_hash, include_paths)
+            cachekey = entry.objectHash
+
+            def add_manifest() -> int:
+                if manifest_info := cache.get_manifest(manifest_hash):
+                    manifest, old_size = manifest_info
+                else:
+                    manifest = Manifest()
+                    old_size = 0
+
+                manifest.add_entry(entry)
+                new_size = cache.set_manifest(manifest_hash, manifest)
+                return new_size - old_size
+
             return ensure_artifacts_exist(
-                cache, cachekey, miss_reason, obj_file, compiler_result
+                cache,
+                cachekey,
+                miss_reason,
+                obj_file,
+                compiler_result,
+                add_manifest,
             )
-
-        entry = create_manifest_entry(manifest_hash, include_paths)
-        cachekey = entry.objectHash
-
-        def add_manifest():
-            manifest = cache.get_manifest(manifest_hash) or Manifest()
-            manifest.add_entry(entry)
-            cache.set_manifest(manifest_hash, manifest)
-
-        return ensure_artifacts_exist(
-            cache,
-            cachekey,
-            miss_reason,
-            obj_file,
-            compiler_result,
-            add_manifest,
-        )
 
 
 def ensure_artifacts_exist(cache: Cache, cache_key: str,
                            reason: MissReason,
                            obj_file: Path,
                            compiler_result: Tuple[int, str, str],
-                           action=None
+                           action: Optional[Callable[[], int]] = None
                            ) -> Tuple[int, str, str]:
     '''
     Ensure that the artifacts for the given cache key exist.
@@ -441,10 +468,8 @@ def ensure_artifacts_exist(cache: Cache, cache_key: str,
 
                 trace(
                     f"Adding file {artifacts.obj_file_path} to cache using key {cache_key}")
-                add_object_to_cache(cache, cache_key, artifacts)
+                add_object_to_cache(cache, cache_key, artifacts, action)
 
-            if action and compile_success:
-                action()
     return return_code, compiler_stdout, compiler_stderr
 
 
@@ -517,7 +542,6 @@ def main() -> int:  # sourcery skip: de-morgan, extract-duplicate-method
         help="set maximum cache size (in GB)",
     )
 
-
     # This argument need to be optional, or it will be required for the status commands above
     parser.add_argument(
         "compiler",
@@ -558,7 +582,7 @@ def main() -> int:  # sourcery skip: de-morgan, extract-duplicate-method
             print("Statistics reset")
             print_statistics(cache)
             return 0
-        
+
         if options.cache_size_gb is not None:
             max_size_value = options.cache_size_gb * 1024 * 1024 * 1024
             if max_size_value < 1:

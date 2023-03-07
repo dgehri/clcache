@@ -326,15 +326,17 @@ class CacheFileWithCouchbaseFallbackStrategy:
         self.remote_cache.set_entry(key, artifacts)
         return size
 
-    def set_manifest(self, manifest_hash: str, manifest: Manifest):
+    def set_manifest(self, manifest_hash: str, manifest: Manifest) -> int:
         '''
         Sets the manifest in the cache.
         
         This will also set the manifest in the remote cache.
         '''
         with self.local_cache.manifest_lock_for(manifest_hash):
-            self.local_cache.set_manifest(manifest_hash, manifest)
+            size = self.local_cache.set_manifest(manifest_hash, manifest)
         self.remote_cache.set_manifest(manifest_hash, manifest)
+        
+        return size
 
     def get_manifest(self, manifest_hash: str):
         '''
@@ -348,11 +350,11 @@ class CacheFileWithCouchbaseFallbackStrategy:
 
         if remote := self.remote_cache.get_manifest(manifest_hash):
             with self.local_cache.manifest_lock_for(manifest_hash):
-                self.local_cache.set_manifest(manifest_hash, remote)
+                size = self.local_cache.set_manifest(manifest_hash, remote)
             trace(
                 f"{self} remote manifest hit for {manifest_hash} writing into local cache"
             )
-            return remote
+            return remote, size
 
         return None
 
