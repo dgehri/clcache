@@ -6,8 +6,8 @@ from .persistent_json_dict import PersistentJsonDict
 
 
 class MissReason(Enum):
-    HEADER_CHANGED_MISS = "HeaderChangedMisses"
-    SOURCE_CHANGED_MISS = "SourceChangedMisses"
+    HEADER_CHANGED_MISS = "HeaderChangedMisses" # Header file changed
+    SOURCE_CHANGED_MISS = "SourceChangedMisses" # Source file changed
     CALL_WITH_INVALID_ARGUMENT = "CallsWithInvalidArgument"
     CALL_WITHOUT_SOURCE_FILE = "CallsWithoutSourceFile"
     CALL_WITH_MULTIPLE_SOURCE_FILES = "CallsWithMultipleSourceFiles"

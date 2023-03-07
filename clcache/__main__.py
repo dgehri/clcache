@@ -216,7 +216,7 @@ def schedule_jobs(
 ) -> int:
     '''
     Schedule jobs for the given command line.
-    
+
     Parameters:
         cache: The cache to use.
         compiler: The compiler to use.
@@ -309,7 +309,10 @@ def process_single_source(cache, compiler,
         return invoke_real_compiler(compiler, cmdline, environment=environment)
 
 
-def process(cache: Cache, obj_file: Path, compiler: Path, cmdline: List[str], src_file: Path) -> Tuple[int, str, str]:
+def process(cache: Cache, obj_file: Path,
+            compiler: Path,
+            cmdline: List[str],
+            src_file: Path) -> Tuple[int, str, str]:
     '''
     Process a single source file.
 
