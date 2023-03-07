@@ -12,11 +12,11 @@ from shutil import rmtree
 OUTPUT_LOCK = threading.Lock()
 
 
-def print_locked(stream, str: str):
+def print_binary(stream, data: bytes):
     with OUTPUT_LOCK:
         # split raw_data into chunks of 8192 bytes and write them to the stream
-        for i in range(0, len(str), 8192):
-            stream.write(str[i:i + 8192])
+        for i in range(0, len(data), 8192):
+            stream.buffer.write(data[i:i + 8192])
 
         stream.flush()
 

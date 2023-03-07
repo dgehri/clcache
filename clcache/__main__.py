@@ -474,15 +474,10 @@ def ensure_artifacts_exist(cache: Cache, cache_key: str,
 
 
 def print_stdout_and_stderr(out: str, err: str):
-    print_locked(sys.stdout, out)
-    print_locked(sys.stderr, err)
-
+    print_binary(sys.stdout, out.encode(CL_DEFAULT_CODEC))
+    print_binary(sys.stderr, err.encode(CL_DEFAULT_CODEC))
 
 def main() -> int:  # sourcery skip: de-morgan, extract-duplicate-method
-    # Reconfigure the stdout / stderr streams to use the default codec used by the compiler
-    sys.stdout.reconfigure(encoding=CL_DEFAULT_CODEC)  # type: ignore
-    sys.stderr.reconfigure(encoding=CL_DEFAULT_CODEC)  # type: ignore
-
     # These Argparse Actions are necessary because the first commandline
     # argument, the compiler executable path, is optional, and the argparse
     # class does not support conditional selection of positional arguments.
