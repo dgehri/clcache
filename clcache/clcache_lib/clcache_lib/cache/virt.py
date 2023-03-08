@@ -14,9 +14,8 @@ BUILDDIR_REPLACEMENT: str = "<BUILD_DIR>"
 CONANDIR_REPLACEMENT: str = "<CONAN_USER_HOME>"
 QTDIR_REPLACEMENT: str = "<QT_DIR>"
 
-# Normalize a directory path, removing trailing slashes.
 
-
+@functools.cache
 def _normalize_dir(dir_path: Path) -> Path:
     '''
     Normalize a directory path, removing trailing slashes.
@@ -29,6 +28,7 @@ def _normalize_dir(dir_path: Path) -> Path:
     return Path(result)
 
 
+@functools.cache
 def _get_dir_resolved(path: Path) -> Optional[Path]:
     '''Resolve a path, if it exists.'''
     with contextlib.suppress(Exception):
@@ -335,7 +335,7 @@ def get_conan_user_home(hint_path: Optional[Path] = None) -> Path:
         if v := os.environ.get("USERPROFILE"):
             hint_path = Path(v)
 
-    return resolve(hint_path.absolute()) if hint_path else Path()
+    return hint_path.absolute() if hint_path else Path()
 
 
 def _get_conan_user_home_re(path: Optional[Path] = None) -> re.Pattern[str]:
@@ -386,7 +386,7 @@ def _canonicalize_conan_dir(path_str: str) -> Optional[str]:
         if real_path_file.is_file():
             with open(real_path_file, "r") as f:
                 # Transform to long form
-                real_path = resolve(Path(f.readline()))
+                real_path = Path(f.readline())
                 path_str = str(real_path / path_str[m.end()+1:])
 
     # Attempt to replace the Conan user home with the placeholder
@@ -446,8 +446,7 @@ def _canonicalize_qt_dir(path_str: str) -> Optional[str]:
     global QT_DIR_STR
 
     if QT_DIR_STR is None:
-        m = _canonicalize_qt_dir.RE_QT_DIR.match(path_str)
-        if m is not None:
+        if m := _canonicalize_qt_dir.RE_QT_DIR.match(path_str):
             QT_DIR_STR = m.group(1)
 
     if QT_DIR_STR is None:
@@ -468,7 +467,7 @@ _canonicalize_qt_dir.RE_QT_DIR = re.compile(
 def canonicalize_path(path: Path) -> str:
     """Canonicalize a path by applying placeholder replacements."""
 
-    path_str = str(resolve(path)).lower()
+    path_str = str(path).lower()
 
     return (
         _canonicalize_build_dir(path_str)
@@ -510,9 +509,9 @@ def canonicalize_compile_output(compiler_output: str, stream: StdStream) -> str:
         line = line.rstrip("\r\n")
 
         if match := regex.match(line):
+            orig_path = Path(os.path.normpath(match[2])).absolute()
             # Canonicalize the path
-            file_path = canonicalize_path(
-                Path(os.path.normpath(match[2])).absolute())
+            file_path = canonicalize_path(orig_path)
             line = f"{match[1]}{file_path}"
 
         lines.append(line)
