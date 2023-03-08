@@ -2,7 +2,7 @@ from conans import ConanFile
 
 class ClcacheConan(ConanFile):
     name = "clcache"
-    version = "4.4.0i"
+    version = "4.4.0k"
     author = "Daniel Gehriger <dgehriger@globusmedical.com>"
     settings = "os", "arch"
     description = "A compiler cache for Microsoft Visual Studio"

@@ -488,8 +488,7 @@ def expand_compile_output(compiler_output: str, stream: StdStream) -> str:
     """Expand the canonicalized paths in the compiler output."""
     regex = RE_STDOUT if stream == StdStream.STDOUT else RE_STDERR
     lines = []
-    for line in line_iter(compiler_output):
-        line = line.rstrip("\r\n")
+    for line in line_iter(compiler_output, strip=True):
         match = regex.match(line)
         if match is not None:
             file_path = expand_path(match[2])
@@ -505,9 +504,7 @@ def canonicalize_compile_output(compiler_output: str, stream: StdStream) -> str:
     """Canonicalize the paths in the compiler output."""
     regex = RE_STDOUT if stream == StdStream.STDOUT else RE_STDERR
     lines = []
-    for line in line_iter(compiler_output):
-        line = line.rstrip("\r\n")
-
+    for line in line_iter(compiler_output, strip=True):
         if match := regex.match(line):
             orig_path = Path(os.path.normpath(match[2])).absolute()
             # Canonicalize the path
@@ -562,33 +559,32 @@ def subst_basedir_with_placeholder(src_code: bytes, src_dir: Path) -> bytes:
     """
     result: List[bytes] = []
 
+    base_dir_replacement = Path(BASEDIR_REPLACEMENT)
+
     # iterate over src_code line by line
     line: bytes
-    for line in line_iter_b(src_code):
-        include_path: Optional[bytes] = None
-        if m := subst_basedir_with_placeholder.INCLUDE_RE.match(line):
-            include_path = m[1]
-        elif m := subst_basedir_with_placeholder.COMMENT_RE.match(line):
-            include_path = m[1]
+    for line in line_iter_b(src_code, strip=True):
+        with contextlib.suppress(UnicodeDecodeError, ValueError):
+            include_path: Optional[Path] = None
+            if m := subst_basedir_with_placeholder.INCLUDE_RE.match(line):
+                include_path = Path(m[1].decode())
+            elif m := subst_basedir_with_placeholder.COMMENT_RE.match(line):
+                include_path = Path(m[1].decode())
 
-        if include_path:
-            with contextlib.suppress(UnicodeDecodeError):
-                include_path_str = include_path.decode()
-
+            if include_path:
                 # test if include path is relative
-                if include_path_str.startswith('..'):
-                    include_path_str = os.path.normpath(
-                        f"{str(src_dir)}/{include_path_str}")
+                if not include_path.is_absolute():
+                    include_path = Path(
+                        os.path.normpath(src_dir / include_path))
 
                 # check if result in base dir
-                if is_in_base_dir(include_path_str):
+                if is_in_base_dir(include_path):
                     # get relative path to base dir
-                    include_path_rel: str = os.path.relpath(
-                        include_path_str, BASEDIR_STR)
+                    include_path_rel = include_path.relative_to(BASEDIR_STR)
 
                     # replace with placeholder
-                    line = line.replace(m[1], os.path.join(
-                        BASEDIR_REPLACEMENT.encode(), include_path_rel.encode()), 1)
+                    line = line.replace(
+                        m[1], (base_dir_replacement / include_path_rel).as_posix().encode(), 1)
         result.append(line)
 
     return b'\n'.join(result)

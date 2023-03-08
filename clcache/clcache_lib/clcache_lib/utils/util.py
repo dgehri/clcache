@@ -68,25 +68,27 @@ def ensure_dir_exists(path: Path):
         raise
 
 
-def line_iter(str: str) -> Generator[str, None, None]:
+def line_iter(str: str, strip = False) -> Generator[str, None, None]:
     '''Iterate over lines in a string, separated by newline characters.'''
     pos = -1
     while True:
         next_pos = str.find('\n', pos + 1)
         if next_pos < 0:
             break
-        yield str[pos + 1:next_pos]
+        line = str[pos + 1:next_pos]
+        yield line.rstrip("\r\n") if strip else line
         pos = next_pos
 
 
-def line_iter_b(str: bytes) -> Generator[bytes, None, None]:
+def line_iter_b(str: bytes, strip = False) -> Generator[bytes, None, None]:
     '''Iterate over lines in a bytestring, separated by newline characters.'''
     pos = -1
     while True:
         next_pos = str.find(b'\n', pos + 1)
         if next_pos < 0:
             break
-        yield str[pos + 1:next_pos]
+        line = str[pos + 1:next_pos]
+        yield line.rstrip(b"\r\n") if strip else line
         pos = next_pos
 
 

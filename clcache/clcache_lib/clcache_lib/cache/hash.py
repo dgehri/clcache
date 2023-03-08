@@ -7,6 +7,7 @@ import pickle
 from ctypes import windll, wintypes
 from typing import List, Optional
 
+from ..utils.util import trace
 from ..config import CACHE_VERSION
 from .virt import subst_basedir_with_placeholder, is_in_build_dir
 
@@ -100,14 +101,14 @@ def get_file_hash(path: Path, toolset_data: Optional[str] = None) -> str:
             src_content = subst_basedir_with_placeholder(f.read(),  src_dir)
             hasher.update(src_content)
 
-    # trace(f"File hash: {filePath} => {hasher.hexdigest()}", 2)
+    trace(f"File hash: {path} => {hasher.hexdigest()}", 2)
 
     if toolset_data is not None:
         # Encoding of this additional data does not really matter
         # as long as we keep it fixed, otherwise hashes change.
         # The string should fit into ASCII, so UTF8 should not change anything
         hasher.update(toolset_data.encode("UTF-8"))
-        # trace(f"AdditionalData Hash: {hasher.hexdigest()}: {additionalData}", 2)
+        trace(f"AdditionalData Hash: {hasher.hexdigest()}: {toolset_data}", 2)
 
     return hasher.hexdigest()
 
