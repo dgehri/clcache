@@ -1,6 +1,8 @@
 import contextlib
 import hashlib
 import re
+from typing import Dict
+from ..cache.stats import MissReason
 import lz4.frame
 
 from couchbase.auth import PasswordAuthenticator
@@ -22,10 +24,10 @@ HashAlgorithm = hashlib.md5
 
 
 class CacheCouchbaseStrategy:
-    def __init__(self, url):
+    def __init__(self, url: str):
         self.is_bad = False
-        self.cache = {}
-        self.url = url
+        self.cache: Dict[str, Optional[Dict]] = {}
+        self.url: str = url
         self._cluster = None
         self._bucket = None
         self._coll_manifests = None
@@ -48,7 +50,8 @@ class CacheCouchbaseStrategy:
             raise Exception("Bad cluster")
 
         if not self._cluster:
-            self._cluster = Cluster(f"couchbase://{self.host}", self.opts) # type: ignore
+            self._cluster = Cluster(
+                f"couchbase://{self.host}", self.opts)  # type: ignore
         return self._cluster
 
     @property
@@ -106,7 +109,7 @@ class CacheCouchbaseStrategy:
             return None
         try:
             return self._fetchEntryImpl(key)
-        except Exception as e:
+        except Exception:
             self.cache[key] = None
             return None
 
@@ -140,7 +143,7 @@ class CacheCouchbaseStrategy:
                 COUCHBASE_EXPIRATION,
                 GetAndTouchOptions(
                     transcoder=RawBinaryTranscoderEx(), timeout=COUCHBASE_GET_TIMEOUT
-                ), # type: ignore
+                ),  # type: ignore
             )
             obj_data.append(res.value)
             hasher.update(obj_data[-1])
@@ -177,7 +180,7 @@ class CacheCouchbaseStrategy:
     def set_entry(self, key: str, artifacts: CompilerArtifacts) -> int:
         '''
         Stores the given artifacts in the cache.
-        
+
         Returns:
             The number of bytes stored in the cache. 0 if the entry was not stored.
         '''
@@ -195,7 +198,7 @@ class CacheCouchbaseStrategy:
     def _setEntryFromFile(self, obj_file, key: str, artifacts: CompilerArtifacts) -> int:
         '''
         Stores the given artifacts in the cache.
-        
+
         Returns:
             The number of bytes stored in the cache. 0 if the entry was not stored.
         '''
@@ -223,7 +226,9 @@ class CacheCouchbaseStrategy:
             res = coll_data.upsert(
                 sub_key,
                 obj_view[s:e],  # type: ignore
-                UpsertOptions(transcoder=RawBinaryTranscoderEx()), # type: ignore
+                UpsertOptions(\
+                    transcoder=RawBinaryTranscoderEx())  # type: ignore
+                ,
             )
             if not res.success:
                 return 0
@@ -276,11 +281,11 @@ class CacheFileWithCouchbaseFallbackStrategy:
     def __init__(self, url, cacheDirectory=None):
         self.local_cache = CacheFileStrategy(cache_dir=cacheDirectory)
         self.remote_cache = CacheCouchbaseStrategy(url)
-        
+
     def __enter__(self):
         self.local_cache.__enter__()
         return self
-    
+
     def __exit__(self, exc_type, exc_value, traceback):
         return self.local_cache.__exit__(exc_type, exc_value, traceback)
 
@@ -300,7 +305,7 @@ class CacheFileWithCouchbaseFallbackStrategy:
     def get_entry(self, key: str) -> Optional[CompilerArtifacts]:
         '''
         Returns the cache entry, or None if it is not in the cache.
-        
+
         If the entry is in the remote cache, it will be copied into the local cache.
         '''
         local_hit, _ = self.local_cache.has_entry(key)
@@ -310,7 +315,12 @@ class CacheFileWithCouchbaseFallbackStrategy:
 
         if payload := self.remote_cache.getEntryAsPayload(key):
             trace(f"{self} remote cache hit for {key} dumping into local cache")
-            self.local_cache.set_entry_from_payload(key, payload)
+            size = self.local_cache.set_entry_from_payload(key, payload)
+
+            # record the hit, and size of the object in the stats
+            self.local_cache.current_stats.register_cache_entry_size(size)
+            self.local_cache.current_stats.register_cache_entry(MissReason.REMOTE_CACHE_HIT)
+
             return self.local_cache.get_entry(key)
 
         return None
@@ -318,7 +328,7 @@ class CacheFileWithCouchbaseFallbackStrategy:
     def set_entry(self, key: str, artifacts) -> int:
         '''
         Sets the cache entry.
-        
+
         Returns:
             The size of the entry in bytes.
         '''
@@ -329,19 +339,19 @@ class CacheFileWithCouchbaseFallbackStrategy:
     def set_manifest(self, manifest_hash: str, manifest: Manifest) -> int:
         '''
         Sets the manifest in the cache.
-        
+
         This will also set the manifest in the remote cache.
         '''
         with self.local_cache.manifest_lock_for(manifest_hash):
             size = self.local_cache.set_manifest(manifest_hash, manifest)
         self.remote_cache.set_manifest(manifest_hash, manifest)
-        
+
         return size
 
-    def get_manifest(self, manifest_hash: str):
+    def get_manifest(self, manifest_hash: str) -> Optional[Tuple[Manifest, int]]:
         '''
         Returns the manifest, or None if it is not in the cache.
-        
+
         If the manifest is in the remote cache, it will be copied into the local cache.
         '''
         if local := self.local_cache.get_manifest(manifest_hash):
@@ -351,6 +361,10 @@ class CacheFileWithCouchbaseFallbackStrategy:
         if remote := self.remote_cache.get_manifest(manifest_hash):
             with self.local_cache.manifest_lock_for(manifest_hash):
                 size = self.local_cache.set_manifest(manifest_hash, remote)
+
+                # record the size of the manifest in the stats
+                self.local_cache.current_stats.register_cache_entry_size(size)
+
             trace(
                 f"{self} remote manifest hit for {manifest_hash} writing into local cache"
             )
@@ -361,7 +375,7 @@ class CacheFileWithCouchbaseFallbackStrategy:
     @property
     def current_stats(self):
         return self.local_cache.current_stats
-    
+
     @property
     def persistent_stats(self):
         return self.local_cache.persistent_stats
@@ -384,6 +398,6 @@ class CacheFileWithCouchbaseFallbackStrategy:
 
     def clean(self):
         self.local_cache.clean()
-        
+
     def clear(self):
         self.local_cache.clear()

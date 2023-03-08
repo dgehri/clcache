@@ -3,7 +3,7 @@ import contextlib
 import json
 import os
 import time
-from typing import NamedTuple
+from typing import NamedTuple, Tuple, List
 from atomicwrites import atomic_write
 
 from ..utils.util import *
@@ -93,7 +93,7 @@ class ManifestSection:
                     entries = [e._asdict() for e in manifest.entries()]
                     jsonobject = {"entries": entries}
                     json.dump(jsonobject, out_file, sort_keys=True, indent=2)
-                    
+
                 # Return the size of the manifest file (warning: don't move inside the with block!)
                 return manifest_path.stat().st_size
             except Exception as e:
@@ -158,19 +158,20 @@ class ManifestRepository:
 
     def clean(self, max_manifest_size: int) -> int:
         '''
-        Removes old manifest files until the total size of the remaining manifest files is less than maxManifestsSize.
+        Removes old manifest files until the total size of the remaining manifest files is less than max_manifest_size.
 
         Parameters:
-            maxManifestsSize: The maximum size of the remaining manifest files in bytes.
+            max_manifest_size: The maximum size of the remaining manifest files in bytes.
 
         Returns:
             The total size of the remaining manifest files in bytes.
         '''
-        manifest_file_infos = []
+        manifest_file_infos: List[Tuple[os.stat_result, Path]] = []
         for section in self.sections():
+            file_path: Path
             for file_path in section.manifest_files():
                 with contextlib.suppress(OSError):
-                    manifest_file_infos.append((os.stat(file_path), file_path))
+                    manifest_file_infos.append((file_path.stat(), file_path))
         manifest_file_infos.sort(key=lambda t: t[0].st_atime, reverse=True)
 
         remaining_obj_size = 0

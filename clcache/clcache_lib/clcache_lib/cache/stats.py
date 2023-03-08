@@ -15,11 +15,11 @@ class MissReason(Enum):
     CALL_FOR_LINKING = "CallsForLinking"
     CALL_FOR_EXTERNAL_DEBUG_INFO = "CallsForExternalDebugInfo"
     CALL_FOR_PREPROCESSING = "CallsForPreprocessing"
+    REMOTE_CACHE_HIT = "RemoteCacheHits"
 
 
 class HitReason(Enum):
-    LOCAL_CACHE_HIT = "CacheHits"
-    REMOTE_CACHE_HIT = "RemoteCacheHits"
+    CACHE_HIT = "CacheHits"
 
 
 class CacheStats(Enum):
@@ -35,13 +35,14 @@ class Stats:
         '''Record a cache miss'''
         self._stats[reason.value] += 1
 
-    def record_cache_hit(self, reason: HitReason):
+    def record_cache_hit(self):
         '''Record a cache hit'''
-        self._stats[reason.value] += 1
+        self._stats[HitReason.CACHE_HIT.value] += 1
 
-    def register_cache_entry(self):
+    def register_cache_entry(self, reason: MissReason):
         '''Register a new cache entry'''
         self._stats[CacheStats.CACHE_ENTRIES.value] += 1
+        self._stats[reason.value] += 1
 
     def register_cache_entry_size(self, size: int):
         '''Register the size of a new cache entry'''
@@ -75,10 +76,11 @@ class PersistentStats:
         return self._dict[enum_key.value]
 
     def total_cache_hits(self) -> int:
-        return self._dict[HitReason.LOCAL_CACHE_HIT.value] + self._dict[HitReason.REMOTE_CACHE_HIT.value]
+        return self._dict[HitReason.CACHE_HIT.value]
 
     def total_cache_misses(self) -> int:
-        return sum(self._dict[attribute.value] for attribute in MissReason)
+        return sum(self._dict[attribute.value] for attribute in MissReason) \
+            - self._dict[MissReason.REMOTE_CACHE_HIT.value]
 
     def cache_size(self) -> int:
         return self.get(CacheStats.CACHE_SIZE)

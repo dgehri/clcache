@@ -107,13 +107,11 @@ def add_object_to_cache(cache: Cache,
         hit, _ = cache.has_entry(cache_key)
         # If the cache entry is not present, add it.
         if not hit:
-            cache.statistics.record_cache_miss(reason)
+            cache.statistics.register_cache_entry(reason)
 
             size = cache.set_entry(cache_key, artifacts)
             if size is None:
                 size = os.path.getsize(artifacts.obj_file_path)
-
-            cache.statistics.register_cache_entry()
 
     if action:
         # Always execute the action, even if the cache entry was present.
@@ -136,11 +134,9 @@ clcache statistics:
   cache entries                : {}
   cache hits (total)           : {} ({:.0f}%)
   cache hits (remote)          : {} ({:.0f}%)
-  cache misses
-    total                      : {} ({:.0f}%)
+  cache misses                 : {} ({:.0f}%)
     header changed             : {}
     source changed             : {}
-  passed to real compiler
     called w/ invalid argument : {}
     called for preprocessing   : {}
     called for linking         : {}
@@ -164,8 +160,8 @@ clcache statistics:
             total_cache_hits,
             float(100 * total_cache_hits) /
             float(total_cache_access) if total_cache_access != 0 else 0,
-            stats.get(HitReason.REMOTE_CACHE_HIT),
-            float(100 * stats.get(HitReason.REMOTE_CACHE_HIT)) /
+            stats.get(MissReason.REMOTE_CACHE_HIT),
+            float(100 * stats.get(MissReason.REMOTE_CACHE_HIT)) /
             float(total_cache_access) if total_cache_access != 0 else 0,
             total_cache_misses,
             float(100 * total_cache_misses) /

@@ -9,7 +9,6 @@
 import argparse
 import concurrent.futures
 import contextlib
-import cProfile
 import os
 import re
 import sys
@@ -82,10 +81,7 @@ def process_cache_hit(cache: Cache, is_local: bool, obj_file: Path, cache_key: s
         f"Reusing cached object for key {cache_key} for object file {obj_file}")
 
     with cache.lock_for(cache_key):
-        if is_local:
-            cache.statistics.record_cache_hit(HitReason.LOCAL_CACHE_HIT)
-        else:
-            cache.statistics.record_cache_hit(HitReason.REMOTE_CACHE_HIT)
+        cache.statistics.record_cache_hit()
 
         if obj_file.exists():
             success = False
@@ -351,23 +347,26 @@ def process(cache: Cache, obj_file: Path,
                         )
                     )
 
-                    # Check if include files have changed
-                    if entry.includesContentHash == includes_content_hash:
+                    # Check if include files have changed, if so, skip this entry
+                    if entry.includesContentHash != includes_content_hash:
+                        continue
 
-                        # Include files have not changed
-                        cachekey = entry.objectHash
+                    # Include files have not changed, we have a hit!
+                    cachekey = entry.objectHash
+                    manifest_hit = True
 
-                        if entry_index > 0:
-                            # Move manifest entry to the top of the entries in the manifest
-                            manifest.touch_entry(cachekey)
-                            cache.set_manifest(manifest_hash, manifest)
+                    # Move manifest entry to the top of the entries in the manifest
+                    # (if not already at top), so that we can use LRU replacement
+                    if entry_index > 0:
+                        manifest.touch_entry(cachekey)
+                        cache.set_manifest(manifest_hash, manifest)
 
-                        manifest_hit = True
-                        with cache.lock_for(cachekey):
-                            hit, is_local = cache.has_entry(cachekey)
-                            if hit:
-                                # Cache hit!
-                                return process_cache_hit(cache, is_local, obj_file, cachekey)
+                    # Check if object file exists in cache
+                    with cache.lock_for(cachekey):
+                        hit, is_local = cache.has_entry(cachekey)
+                        if hit:
+                            # Object cache hit!
+                            return process_cache_hit(cache, is_local, obj_file, cachekey)
 
             miss_reason = MissReason.HEADER_CHANGED_MISS
         else:
@@ -379,16 +378,16 @@ def process(cache: Cache, obj_file: Path,
         # Invoke real compiler and get output
         compiler_result: Tuple[int, str, str] = invoke_real_compiler(
             compiler, cmdline, capture_output=True)
-        
+
         with cache.manifest_lock_for(manifest_hash):
             assert cachekey is not None
             return ensure_artifacts_exist(
                 cache, cachekey, miss_reason, obj_file, compiler_result
             )
-    else:        
+    else:
         strip_includes = False
         if "/showIncludes" not in cmdline:
-            # Ensure compiler dumps include files, but strip them 
+            # Ensure compiler dumps include files, but strip them
             # before printing to stdout, unless /showIncludes is used
             cmdline = list(cmdline)
             cmdline.insert(0, "/showIncludes")
@@ -397,7 +396,7 @@ def process(cache: Cache, obj_file: Path,
         # Invoke real compiler and get output
         compiler_result: Tuple[int, str, str] = invoke_real_compiler(
             compiler, cmdline, capture_output=True)
-            
+
         # Create manifest entry
         include_paths, compiler_output = parse_includes_set(
             compiler_result[1], src_file, strip_includes
@@ -471,6 +470,7 @@ def ensure_artifacts_exist(cache: Cache, cache_key: str,
 def print_stdout_and_stderr(out: str, err: str):
     print_binary(sys.stdout, out.encode(CL_DEFAULT_CODEC))
     print_binary(sys.stderr, err.encode(CL_DEFAULT_CODEC))
+
 
 def main() -> int:  # sourcery skip: de-morgan, extract-duplicate-method
     # These Argparse Actions are necessary because the first commandline
@@ -599,6 +599,8 @@ def main() -> int:  # sourcery skip: de-morgan, extract-duplicate-method
                 "Failed to locate specified compiler, or exe on PATH (and CLCACHE_CL is not set), aborting."
             )
             return 1
+
+        set_llvm_dir(compiler)
 
         trace("Found real compiler binary at '{0!s}'".format(compiler))
         trace(f"Arguments we care about: '{sys.argv}'")

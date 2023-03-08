@@ -5,7 +5,8 @@ from pathlib import Path
 import re
 from typing import List, Optional
 import functools
-from ..utils import resolve, line_iter_b, line_iter
+from ..utils import resolve, line_iter_b, line_iter, \
+    get_short_path_name, get_long_path_name
 from .ex import LogicException
 
 # The folowing replacement strings are used to canonicalize paths in the cache.
@@ -13,6 +14,7 @@ BASEDIR_REPLACEMENT: str = "<BASE_DIR>"
 BUILDDIR_REPLACEMENT: str = "<BUILD_DIR>"
 CONANDIR_REPLACEMENT: str = "<CONAN_USER_HOME>"
 QTDIR_REPLACEMENT: str = "<QT_DIR>"
+LLVM_REPLACEMENT: str = "<LLVM_DIR>"
 
 
 @functools.cache
@@ -150,6 +152,24 @@ CONAN_USER_HOME: Optional[Path] = None
 # Qt folder path, represented <QT_DIR> placeholder
 QT_DIR_STR: Optional[str] = None
 
+# LLVM folder path, represented <LLVM> placeholder
+LLVM_DIR_STR: Optional[str] = None
+LLVM_DIR_SHORT_STR: Optional[str] = None
+
+
+def set_llvm_dir(compiler_path: Path) -> None:
+    re_llvm_dir = re.compile(r"^(.*)(?=\\bin\\clang-cl.exe)", re.IGNORECASE)
+
+    long_path = get_long_path_name(compiler_path)
+    if match := re_llvm_dir.match(str(long_path)):
+        global LLVM_DIR_STR
+        LLVM_DIR_STR = match[1].lower()
+
+    short_path = get_short_path_name(compiler_path)
+    if match := re_llvm_dir.match(str(short_path)):
+        global LLVM_DIR_SHORT_STR
+        LLVM_DIR_SHORT_STR = match[1].lower()
+
 
 @functools.singledispatch
 def is_subdir(path_str: str, prefix: Optional[str], is_lower=False) -> bool:
@@ -222,7 +242,7 @@ def set_cached_compiler_console_output(path: Path, output: str, translate_paths=
 
 
 @functools.cache
-def get_env_path_cached(env: str) -> Optional[Path]:
+def get_env_path(env: str) -> Optional[Path]:
     '''Get a path from an environment variable, and cache the result.'''
     return resolve(Path(value)) if (value := os.getenv(env)) else None
 
@@ -272,8 +292,10 @@ def expand_path(path: str) -> Path:
         return expand_conan_placeholder(CONAN_USER_HOME, path)
     elif QT_DIR_STR and path.startswith(QTDIR_REPLACEMENT):
         return Path(path.replace(QTDIR_REPLACEMENT, QT_DIR_STR, 1))
+    elif LLVM_DIR_STR and path.startswith(LLVM_REPLACEMENT):
+        return Path(path.replace(LLVM_REPLACEMENT, LLVM_DIR_STR, 1))
     elif m := RE_ENV.match(path):
-        if real_path := get_env_path_cached(m.group(1)):
+        if real_path := get_env_path(m.group(1)):
             return real_path / path[m.end(0)+1:]
         else:
             raise LogicException(
@@ -426,17 +448,21 @@ def _canonicalize_toolchain_dirs(path_str: str) -> Optional[str]:
         ]
         for var in ENV_VARS:
             if value := os.environ.get(var):
-                path = os.path.realpath(os.path.normpath(value)).lower()
-                _canonicalize_toolchain_dirs.values.append((var, path))
+                long_path = os.path.realpath(os.path.normpath(value)).lower()
+                short_path = str(get_short_path_name(Path(long_path))).lower()
+                if short_path != long_path:
+                    _canonicalize_toolchain_dirs.values.append(
+                        (var, long_path, short_path))
+                else:
+                    _canonicalize_toolchain_dirs.values.append(
+                        (var, long_path, None))
 
-    return next(
-        (
-            path_str.replace(path, f"<env:{var}>", 1)
-            for var, path in _canonicalize_toolchain_dirs.values
-            if path_str.startswith(path + os.path.sep)
-        ),
-        None,
-    )
+    for var, long_path, short_path in _canonicalize_toolchain_dirs.values:
+        if short_path and path_str.startswith(short_path + os.path.sep):
+            # convert short path to long path
+            path_str = os.path.realpath(path_str)
+        if path_str.startswith(long_path + os.path.sep):
+            return path_str.replace(long_path, f"<env:{var}>", 1)
 
 
 _canonicalize_toolchain_dirs.values = None
@@ -460,7 +486,16 @@ def _canonicalize_qt_dir(path_str: str) -> Optional[str]:
 
 
 _canonicalize_qt_dir.RE_QT_DIR = re.compile(
-    rf"^(.*\\Qt\\\d+\.\d+\.\d+(?=\\))", re.IGNORECASE)
+    rf"^(.*\\Qt)(?=\\\d+\.\d+\.\d+\\)", re.IGNORECASE)
+
+
+def _canonicalize_llvm_dir(path_str: str) -> Optional[str]:
+    if LLVM_DIR_STR and path_str.startswith(LLVM_DIR_STR):
+        return path_str.replace(LLVM_DIR_STR, LLVM_REPLACEMENT, 1)
+    elif LLVM_DIR_SHORT_STR and path_str.startswith(LLVM_DIR_SHORT_STR):
+        return path_str.replace(LLVM_DIR_SHORT_STR, LLVM_REPLACEMENT, 1)
+    else:
+        return None
 
 
 @functools.cache
@@ -474,6 +509,7 @@ def canonicalize_path(path: Path) -> str:
         or _canonicalize_base_dir(path_str)
         or _canonicalize_conan_dir(path_str)
         or _canonicalize_qt_dir(path_str)
+        or _canonicalize_llvm_dir(path_str)
         or _canonicalize_toolchain_dirs(path_str)
         or path_str
     )

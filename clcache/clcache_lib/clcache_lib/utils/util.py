@@ -1,3 +1,5 @@
+import ctypes
+from ctypes import wintypes
 import functools
 from pathlib import Path
 import sys
@@ -29,6 +31,62 @@ def resolve(path: Path) -> Path:
         return path.resolve()
     except Exception:
         return path
+
+
+_GetShortPathNameW = ctypes.windll.kernel32.GetShortPathNameW
+_GetShortPathNameW.argtypes = [
+    wintypes.LPCWSTR, wintypes.LPWSTR, wintypes.DWORD]
+_GetShortPathNameW.restype = wintypes.DWORD
+_GetLongPathNameW = ctypes.windll.kernel32.GetLongPathNameW
+_GetLongPathNameW.argtypes = [
+    wintypes.LPCWSTR, wintypes.LPWSTR, wintypes.DWORD]
+_GetLongPathNameW.restype = wintypes.DWORD
+
+
+def get_short_path_name(path: Path) -> Path:
+    """
+    Get the short path name of a path
+
+        Parameters:
+            path (str): the path to get the short path name for
+
+        Returns:
+            str: the short path name
+    """
+    path_str = str(path)
+    output_buf_size = len(path_str)
+    while True:
+        output_buf = ctypes.create_unicode_buffer(output_buf_size)
+        needed = _GetShortPathNameW(path_str, output_buf, output_buf_size)
+        if output_buf_size >= needed:
+            return Path(output_buf.value)
+        elif needed == 0:
+            return path
+        else:
+            output_buf_size = needed
+
+
+def get_long_path_name(path: Path) -> Path:
+    """
+    Get the long path name of a path
+
+        Parameters:
+            path (str): the path to get the long path name for
+
+        Returns:
+            str: the long path name
+    """
+    path_str = str(path)
+    output_buf_size = len(path_str)
+    while True:
+        output_buf = ctypes.create_unicode_buffer(output_buf_size)
+        needed = _GetLongPathNameW(path_str, output_buf, output_buf_size)
+        if output_buf_size >= needed:
+            return Path(output_buf.value)
+        elif needed == 0:
+            return path
+        else:
+            output_buf_size = needed
 
 
 def files_beneath(base_dir: Path) -> Generator[Path, None, None]:
@@ -68,7 +126,7 @@ def ensure_dir_exists(path: Path):
         raise
 
 
-def line_iter(str: str, strip = False) -> Generator[str, None, None]:
+def line_iter(str: str, strip=False) -> Generator[str, None, None]:
     '''Iterate over lines in a string, separated by newline characters.'''
     pos = -1
     while True:
@@ -80,7 +138,7 @@ def line_iter(str: str, strip = False) -> Generator[str, None, None]:
         pos = next_pos
 
 
-def line_iter_b(str: bytes, strip = False) -> Generator[bytes, None, None]:
+def line_iter_b(str: bytes, strip=False) -> Generator[bytes, None, None]:
     '''Iterate over lines in a bytestring, separated by newline characters.'''
     pos = -1
     while True:
