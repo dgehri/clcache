@@ -306,7 +306,7 @@ def process_single_source(cache, compiler,
 
 
 def process(cache: Cache, obj_file: Path,
-            compiler: Path,
+            compiler_path: Path,
             cmdline: List[str],
             src_file: Path) -> Tuple[int, str, str]:
     '''
@@ -324,109 +324,114 @@ def process(cache: Cache, obj_file: Path,
 
     # Get manifest hash
     manifest_hash: str = ManifestRepository.get_manifest_hash(
-        compiler, cmdline, src_file)
+        compiler_path, cmdline, src_file)
 
-    manifest_hit = False
-    cachekey = None
-
-    with cache.manifest_lock_for(manifest_hash):
-        # Get the manifest for the manifest hash (if it exists)
-        if manifest_info := cache.get_manifest(manifest_hash):
-            manifest, _ = manifest_info
-
-            # Check if manifest entry exists
-            for entry_index, entry in enumerate(manifest.entries()):
-
-                # NOTE: command line options already included in hash for manifest name
-                with contextlib.suppress(IncludeNotFoundException):
-
-                    # Get hash of include files
-                    includes_content_hash = (
-                        ManifestRepository.get_includes_content_hash_for_files(
-                            [expand_path(path) for path in entry.includeFiles]
-                        )
-                    )
-
-                    # Check if include files have changed, if so, skip this entry
-                    if entry.includesContentHash != includes_content_hash:
-                        continue
-
-                    # Include files have not changed, we have a hit!
-                    cachekey = entry.objectHash
-                    manifest_hit = True
-
-                    # Move manifest entry to the top of the entries in the manifest
-                    # (if not already at top), so that we can use LRU replacement
-                    if entry_index > 0:
-                        manifest.touch_entry(cachekey)
-                        cache.set_manifest(manifest_hash, manifest)
-
-                    # Check if object file exists in cache
-                    with cache.lock_for(cachekey):
-                        hit, is_local = cache.has_entry(cachekey)
-                        if hit:
-                            # Object cache hit!
-                            return process_cache_hit(cache, is_local, obj_file, cachekey)
-
-            miss_reason = MissReason.HEADER_CHANGED_MISS
-        else:
-            miss_reason = MissReason.SOURCE_CHANGED_MISS
-
-    # If we get here, we have a cache miss
-
-    if manifest_hit:
-        # Invoke real compiler and get output
-        compiler_result: Tuple[int, str, str] = invoke_real_compiler(
-            compiler, cmdline, capture_output=True)
+    # Acquire lock for manifest hash to prevent two jobs from compiling the same source
+    # file at the same time. This is a frequent situation on Jenkins, and having the 2nd
+    # job wait for the 1st job to finish compiling the source file is more efficient overall.
+    with CacheLock(manifest_hash, 120*1000*1000):
+        manifest_hit = False
+        cachekey = None
 
         with cache.manifest_lock_for(manifest_hash):
-            assert cachekey is not None
-            return ensure_artifacts_exist(
-                cache, cachekey, miss_reason, obj_file, compiler_result
-            )
-    else:
-        strip_includes = False
-        if "/showIncludes" not in cmdline:
-            # Ensure compiler dumps include files, but strip them
-            # before printing to stdout, unless /showIncludes is used
-            cmdline = list(cmdline)
-            cmdline.insert(0, "/showIncludes")
-            strip_includes = True
+            # Get the manifest for the manifest hash (if it exists)
+            if manifest_info := cache.get_manifest(manifest_hash):
+                manifest, _ = manifest_info
 
-        # Invoke real compiler and get output
-        compiler_result: Tuple[int, str, str] = invoke_real_compiler(
-            compiler, cmdline, capture_output=True)
+                # Check if manifest entry exists
+                for entry_index, entry in enumerate(manifest.entries()):
 
-        # Create manifest entry
-        include_paths, compiler_output = parse_includes_set(
-            compiler_result[1], src_file, strip_includes
-        )
-        compiler_result = (
-            compiler_result[0], compiler_output, compiler_result[2])
+                    # NOTE: command line options already included in hash for manifest name
+                    with contextlib.suppress(IncludeNotFoundException):
 
-        entry = create_manifest_entry(manifest_hash, include_paths)
-        cachekey = entry.objectHash
+                        # Get hash of include files
+                        includes_content_hash = (
+                            ManifestRepository.get_includes_content_hash_for_files(
+                                [expand_path(path)
+                                 for path in entry.includeFiles]
+                            )
+                        )
 
-        def add_manifest() -> int:
+                        # Check if include files have changed, if so, skip this entry
+                        if entry.includesContentHash != includes_content_hash:
+                            continue
+
+                        # Include files have not changed, we have a hit!
+                        cachekey = entry.objectHash
+                        manifest_hit = True
+
+                        # Move manifest entry to the top of the entries in the manifest
+                        # (if not already at top), so that we can use LRU replacement
+                        if entry_index > 0:
+                            manifest.touch_entry(cachekey)
+                            cache.set_manifest(manifest_hash, manifest)
+
+                        # Check if object file exists in cache
+                        with cache.lock_for(cachekey):
+                            hit, is_local = cache.has_entry(cachekey)
+                            if hit:
+                                # Object cache hit!
+                                return process_cache_hit(cache, is_local, obj_file, cachekey)
+
+                miss_reason = MissReason.HEADER_CHANGED_MISS
+            else:
+                miss_reason = MissReason.SOURCE_CHANGED_MISS
+
+        # If we get here, we have a cache miss and we'll need to invoke the real compiler
+        if manifest_hit:
+            # Got a manifest, but no object => invoke real compiler
+            compiler_result = invoke_real_compiler(
+                compiler_path, cmdline, capture_output=True)
+
             with cache.manifest_lock_for(manifest_hash):
-                if manifest_info := cache.get_manifest(manifest_hash):
-                    manifest, old_size = manifest_info
-                else:
-                    manifest = Manifest()
-                    old_size = 0
+                assert cachekey is not None
+                return ensure_artifacts_exist(
+                    cache, cachekey, miss_reason, obj_file, compiler_result
+                )
+        else:
+            # Also generate manifest
+            strip_includes = False
+            if "/showIncludes" not in cmdline:
+                # Ensure compiler dumps include files, but strip them
+                # before printing to stdout, unless /showIncludes is used
+                cmdline = list(cmdline)
+                cmdline.insert(0, "/showIncludes")
+                strip_includes = True
 
-                manifest.add_entry(entry)
-                new_size = cache.set_manifest(manifest_hash, manifest)
-                return new_size - old_size
+            # Invoke real compiler and get output
+            exit_code, compiler_out, compiler_err = invoke_real_compiler(
+                compiler_path, cmdline, capture_output=True)
 
-        return ensure_artifacts_exist(
-            cache,
-            cachekey,
-            miss_reason,
-            obj_file,
-            compiler_result,
-            add_manifest,
-        )
+            # Create manifest entry
+            include_paths, stripped_compiler_out = parse_includes_set(
+                compiler_out, src_file, strip_includes
+            )
+            compiler_result = (
+                exit_code, stripped_compiler_out, compiler_err)
+
+            entry = create_manifest_entry(manifest_hash, include_paths)
+            cachekey = entry.objectHash
+
+            def add_manifest() -> int:
+                with cache.manifest_lock_for(manifest_hash):
+                    if manifest_info := cache.get_manifest(manifest_hash):
+                        manifest, old_size = manifest_info
+                    else:
+                        manifest = Manifest()
+                        old_size = 0
+
+                    manifest.add_entry(entry)
+                    new_size = cache.set_manifest(manifest_hash, manifest)
+                    return new_size - old_size
+
+            return ensure_artifacts_exist(
+                cache,
+                cachekey,
+                miss_reason,
+                obj_file,
+                compiler_result,
+                add_manifest,
+            )
 
 
 def ensure_artifacts_exist(cache: Cache, cache_key: str,
