@@ -108,6 +108,9 @@ class ManifestSection:
         if not manifest_file.exists():
             return None
         try:
+            # touch manifest file to prevent it from being cleaned up
+            manifest_file.touch()
+            
             with open(manifest_file, "r") as in_file:
                 doc = json.load(in_file)
                 return Manifest(
@@ -172,7 +175,7 @@ class ManifestRepository:
             for file_path in section.manifest_files():
                 with contextlib.suppress(OSError):
                     manifest_file_infos.append((file_path.stat(), file_path))
-        manifest_file_infos.sort(key=lambda t: t[0].st_atime, reverse=True)
+        manifest_file_infos.sort(key=lambda t: t[0].st_mtime, reverse=True)
 
         remaining_obj_size = 0
         for stat, filepath in manifest_file_infos:
@@ -388,8 +391,13 @@ class CompilerArtifactsSection:
         hit, _ = self.has_entry(key)
         assert hit
         cache_entry_dir = self.cache_entry_dir(key)
+        
+        # "touch" the cache entry to update its last modified time
+        obj_file = cache_entry_dir / CompilerArtifactsSection.OBJECT_FILE
+        obj_file.touch()
+        
         return CompilerArtifacts(
-            cache_entry_dir / CompilerArtifactsSection.OBJECT_FILE,
+            obj_file,
             get_cached_compiler_console_output(
                 cache_entry_dir / CompilerArtifactsSection.STDOUT_FILE),
             get_cached_compiler_console_output(
@@ -434,16 +442,16 @@ class CompilerArtifactsRepository:
                 with contextlib.suppress(OSError):
                     if object_file_paths := section.cached_objects(cachekey):
                         object_stats = [os.stat(x) for x in object_file_paths]
-                        atime = min(x.st_atime for x in object_stats)
+                        mtime = min(x.st_mtime for x in object_stats)
                         size = sum(x.st_size for x in object_stats)
-                        object_infos.append((atime, size, cachekey))
+                        object_infos.append((mtime, size, cachekey))
         object_infos.sort(key=lambda t: t[0])
 
         # compute real current size to fix up the stored cacheSize
         current_size_objs = sum(x[1] for x in object_infos)
 
         removed_items = 0
-        for atime, size, cachekey in object_infos:
+        for mtime, size, cachekey in object_infos:
             self.remove_entry(cachekey)
             removed_items += 1
             current_size_objs -= size
