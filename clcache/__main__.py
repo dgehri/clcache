@@ -299,7 +299,7 @@ def process_single_source(cache, compiler,
     except OSError:
         return invoke_real_compiler(compiler, cmdline, environment=environment)
     except CompilerFailedException as e:
-        return e.getReturnTuple()
+        return e.get_compiler_result()
     except CacheLockException as e:
         trace(repr(e))
         return invoke_real_compiler(compiler, cmdline, environment=environment)

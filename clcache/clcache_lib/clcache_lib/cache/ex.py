@@ -10,14 +10,14 @@ class CacheLockException(Exception):
 
 
 class CompilerFailedException(Exception):
-    def __init__(self, exitCode: int, msgErr: str, msgOut: str = ""):
-        super(CompilerFailedException, self).__init__(msgErr)
-        self.exitCode = exitCode
-        self.msgOut = msgOut
-        self.msgErr = msgErr
+    def __init__(self, exit_code: int, msg_err: str, msg_out: str = ""):
+        super(CompilerFailedException, self).__init__(msg_err)
+        self.exit_code = exit_code
+        self.msg_out = msg_out
+        self.msg_err = msg_err
 
-    def getReturnTuple(self) -> Tuple[int, str, str]:
-        return self.exitCode, self.msgErr, self.msgOut
+    def get_compiler_result(self) -> Tuple[int, str, str]:
+        return self.exit_code, self.msg_err, self.msg_out
 
 
 class LogicException(Exception):
