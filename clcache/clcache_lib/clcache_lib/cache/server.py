@@ -221,7 +221,7 @@ def spawn_server(server_idle_timeout_s: int, wait_time_s: int = 10):
     with ReadyEvent(PIPE_READY_EVENT) as ready_event:
 
         args = []
-        if "__compiled__" not in sys.modules:
+        if "__compiled__" not in globals():
             args.append(sys.executable)
         args.extend(
             (
@@ -229,6 +229,7 @@ def spawn_server(server_idle_timeout_s: int, wait_time_s: int = 10):
                 f"--run-server={server_idle_timeout_s}",
             )
         )
+        
         p = sp.Popen(
             args, creationflags=sp.CREATE_NEW_PROCESS_GROUP | sp.CREATE_NO_WINDOW)
         return p.pid != 0 and ready_event.wait(wait_time_s*1000)
