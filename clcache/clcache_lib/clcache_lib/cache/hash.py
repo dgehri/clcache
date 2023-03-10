@@ -7,6 +7,8 @@ import pickle
 from ctypes import windll, wintypes
 from typing import List, Optional
 
+from ..cache.server import PIPE_NAME, spawn_server
+from ..config.config import HASH_SERVER_TIMEOUT
 from ..utils.util import trace
 from ..config import CACHE_VERSION
 from .virt import subst_basedir_with_placeholder, is_in_build_dir
@@ -37,7 +39,7 @@ def get_compiler_hash(compiler_path: Path) -> str:
 
     return get_string_hash(data)
 
-
+        
 def get_file_hashes(path_list: List[Path]) -> List[str]:
     '''
     Returns the hashes of the given files.
@@ -48,29 +50,35 @@ def get_file_hashes(path_list: List[Path]) -> List[str]:
     Returns:
         The hashes of the files.
     '''
-    # Try fetching the hashes from the server
-    if "CLCACHE_SERVER" not in os.environ:
-        return [get_file_hash(path) for path in path_list]
-
-    # If the server is not available, fall back to the local cache
-    pipe_name = r"\\.\pipe\clcache_srv"
-    while True:
+    
+    if "NO_CLCACHE_SERVER" not in os.environ:
         try:
-            with open(pipe_name, "w+b") as f:
-                f.write("\n".join(str(path_list)).encode("utf-8"))
-                f.write(b"\x00")
-                response = f.read()
-                if response.startswith(b"!"):
-                    raise pickle.loads(response[1:-1])
-                return response[:-1].decode("utf-8").splitlines()
-        except OSError as e:
-            if (
-                e.errno == errno.EINVAL
-                and windll.kernel32.GetLastError() == ERROR_PIPE_BUSY
-            ):
-                windll.kernel32.WaitNamedPipeW(pipe_name, NMPWAIT_WAIT_FOREVER)
-            else:
-                raise
+            if not spawn_server(HASH_SERVER_TIMEOUT.seconds):
+                raise OSError("Server didn't start in time")            
+
+            while True:
+                try:
+                    with open(PIPE_NAME, "w+b") as f:
+                        f.write("\n".join(map(str, path_list)).encode("utf-8"))
+                        f.write(b"\x00")
+                        response = f.read()
+                        if response.startswith(b"!"):
+                            raise pickle.loads(response[1:-1])
+                        return response[:-1].decode("utf-8").splitlines()
+                except OSError as e:
+                    if (
+                        e.errno == errno.EINVAL
+                        and windll.kernel32.GetLastError() == ERROR_PIPE_BUSY
+                    ):
+                        # All pipe instances are busy, wait until available
+                        windll.kernel32.WaitNamedPipeW(
+                            PIPE_NAME, NMPWAIT_WAIT_FOREVER)
+                    else:
+                        raise
+        except Exception as e:
+            trace(f"Failed to use server: {e}", 1)
+
+    return [get_file_hash(path) for path in path_list]
 
 
 @functools.cache

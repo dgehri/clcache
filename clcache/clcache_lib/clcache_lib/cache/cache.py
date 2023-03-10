@@ -137,6 +137,7 @@ clcache statistics:
   cache misses                 : {} ({:.0f}%)
     header changed             : {}
     source changed             : {}
+    cache failure              : {}
     called w/ invalid argument : {}
     called for preprocessing   : {}
     called for linking         : {}
@@ -168,6 +169,7 @@ clcache statistics:
             float(total_cache_access) if total_cache_access != 0 else 0,
             stats.get(MissReason.HEADER_CHANGED_MISS),
             stats.get(MissReason.SOURCE_CHANGED_MISS),
+            stats.get(MissReason.CACHE_FAILURE),
             stats.get(MissReason.CALL_WITH_INVALID_ARGUMENT),
             stats.get(MissReason.CALL_FOR_PREPROCESSING),
             stats.get(MissReason.CALL_FOR_LINKING),
