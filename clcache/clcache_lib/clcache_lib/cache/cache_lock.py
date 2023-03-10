@@ -12,8 +12,8 @@ class CacheLock:
     WAIT_ABANDONED_CODE = 0x00000080
     WAIT_TIMEOUT_CODE = 0x00000102
 
-    def __init__(self, mutexName: str, timeout_ms: int):
-        self._mutex_name = "Local\\" + mutexName
+    def __init__(self, mutex_name: str, timeout_ms: int):
+        self._mutex_name = "Local\\" + mutex_name
         self._mutex = None
         self._timeout_ms = timeout_ms
         # self._t0 = None

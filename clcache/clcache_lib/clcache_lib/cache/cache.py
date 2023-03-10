@@ -3,7 +3,7 @@ import os
 from pathlib import Path
 from typing import Callable, Optional, Tuple
 
-from .stats import CacheStats, HitReason, MissReason, PersistentStats, Stats
+from .stats import CacheStats, MissReason, PersistentStats, Stats
 from ..utils.util import trace
 from .file_cache import CacheFileStrategy, CompilerArtifacts
 
