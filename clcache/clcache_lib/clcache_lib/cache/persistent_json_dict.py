@@ -59,6 +59,9 @@ class PersistentJsonDict:
     def __getitem__(self, key):
         return self._dict[key]
 
+    def __setitem__(self, key, value):
+        self._dict[key] = value
+
     # def __setitem__(self, key, value):
     #     if self._dict[key] != value:
     #         self._dict[key] = value

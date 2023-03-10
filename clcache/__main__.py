@@ -6,7 +6,6 @@
 # full text of which is available in the accompanying LICENSE file at the
 # root directory of this project.
 #
-import time
 from clcache_lib.config import VERSION
 import argparse
 import os
@@ -186,9 +185,4 @@ def main() -> int:  # sourcery skip: de-morgan, extract-duplicate-method
 
 
 if __name__ == "__main__":
-    # calculate execution time
-    now = time.time()
-    result = main()
-    
-    print(f"Execution time: {time.time() - now:.2f} seconds")
-    sys.exit(result)
+    sys.exit(main())
