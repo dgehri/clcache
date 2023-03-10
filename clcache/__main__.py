@@ -37,20 +37,20 @@ def parse_args() -> argparse.Namespace:
         "--stats",
         dest="show_stats",
         action="store_true",
-        help="print cache statistics",
+        help="Print cache statistics",
     )
     group_parser.add_argument(
-        "-c", "--clean", dest="clean_cache", action="store_true", help="clean cache"
+        "-c", "--clean", dest="clean_cache", action="store_true", help="Clean cache"
     )
     group_parser.add_argument(
-        "-C", "--clear", dest="clear_cache", action="store_true", help="clear cache"
+        "-C", "--clear", dest="clear_cache", action="store_true", help="Clear cache"
     )
     group_parser.add_argument(
         "-z",
         "--reset",
         dest="reset_stats",
         action="store_true",
-        help="reset cache statistics",
+        help="Reset cache statistics",
     )
     group_parser.add_argument(
         "-M",
@@ -58,21 +58,21 @@ def parse_args() -> argparse.Namespace:
         dest="cache_size",
         type=int,
         default=None,
-        help="set maximum cache size (in bytes)",
+        help="Set maximum cache size (in bytes)",
     )
     group_parser.add_argument(
         "--set-size-gb",
         dest="cache_size_gb",
         type=int,
         default=None,
-        help="set maximum cache size (in GB)",
+        help="Set maximum cache size (in GB)",
     )
     group_parser.add_argument(
         "--run-server",
         dest="run_server",
         type=int,
         default=None,
-        help="run clcache server (optional timeout in seconds)",
+        help="Run clcache server (optional timeout in seconds)",
     )
 
     # This argument need to be optional, or it will be required for the status commands above

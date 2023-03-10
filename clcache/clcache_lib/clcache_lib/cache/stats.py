@@ -81,7 +81,8 @@ class PersistentStats:
 
     def total_cache_misses(self) -> int:
         return sum(self._dict[attribute.value] for attribute in MissReason) \
-            - self._dict[MissReason.REMOTE_CACHE_HIT.value]
+            - self._dict[MissReason.REMOTE_CACHE_HIT.value] \
+            - self._dict[MissReason.CALL_WITHOUT_SOURCE_FILE.value]
 
     def cache_size(self) -> int:
         return self.get(CacheStats.CACHE_SIZE)
