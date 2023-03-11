@@ -627,6 +627,6 @@ def subst_basedir_with_placeholder(src_code: bytes, src_dir: Path) -> bytes:
 
 
 subst_basedir_with_placeholder.INCLUDE_RE = \
-    re.compile(br"^\s*#\s*include\s+(?:[\"<])(.*)[\">]", re.IGNORECASE)
+    re.compile(br"^\s*#\s*include\s*(?:[\"<])(.*)[\">]", re.IGNORECASE)
 subst_basedir_with_placeholder.COMMENT_RE = \
-    re.compile(br"^\s*\/\/\s*([^\s<>|?*\"]+)$", re.IGNORECASE)
+    re.compile(br"^\s*\/\/\s*([^<>|?*\"]+)$", re.IGNORECASE)
