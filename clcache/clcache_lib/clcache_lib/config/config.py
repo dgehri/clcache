@@ -15,5 +15,11 @@ CL_DEFAULT_CODEC = "mbcs"
 # manifests grow too large.
 MAX_MANIFEST_HASHES = 100
 
-# Maximum idle time for a cache server before it shuts down
+# Maximum idle time for cache server before it shuts down
+#
+# This value can be overridden by setting the CLCACHE_SERVER_TIMEOUT_MINUTES
+# environment variable to a value in minutes.
+# 
+# Use of the cache server can be disabled entirely by setting the environment
+# variable CLCACHE_SERVER_TIMEOUT_MINUTES to 0.
 HASH_SERVER_TIMEOUT = timedelta(seconds=60)

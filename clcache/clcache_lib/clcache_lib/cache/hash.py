@@ -39,7 +39,22 @@ def get_compiler_hash(compiler_path: Path) -> str:
 
     return get_string_hash(data)
 
-        
+
+def _get_sever_timeout_seconds() -> Optional[int]:
+    '''
+    Returns the timeout for the hash server in seconds.
+
+    Returns None if the timeout is not set or invalid, or less than 1 minute.
+    '''
+    # ignore exception if not a valid int
+    try:
+        minutes = int(os.environ.get(
+            "CLCACHE_SERVER_TIMEOUT_MINUTES", str(HASH_SERVER_TIMEOUT.min)))
+        return None if minutes < 1 else minutes * 60
+    except ValueError:
+        return None
+
+
 def get_file_hashes(path_list: List[Path]) -> List[str]:
     '''
     Returns the hashes of the given files.
@@ -50,11 +65,11 @@ def get_file_hashes(path_list: List[Path]) -> List[str]:
     Returns:
         The hashes of the files.
     '''
-    
-    if "NO_CLCACHE_SERVER" not in os.environ:
+
+    if server_timeout_secs := _get_sever_timeout_seconds():
         try:
-            if not spawn_server(HASH_SERVER_TIMEOUT.seconds):
-                raise OSError("Server didn't start in time")            
+            if not spawn_server(server_timeout_secs):
+                raise OSError("Server didn't start in time")
 
             while True:
                 try:
