@@ -9,12 +9,13 @@ import signal
 import subprocess as sp
 import sys
 from typing import Callable
+from ..config.config import VERSION
 import pyuv
 
 BUFFER_SIZE = 65536
-PIPE_NAME = r'\\.\pipe\LOCAL\clcache-626763c0-bebe-11ed-a901-0800200c9a66'
-SINGLETON_NAME = r"Local\singleton-626763c0-bebe-11ed-a901-0800200c9a66"
-PIPE_READY_EVENT = r"Local\ready-626763c0-bebe-11ed-a901-0800200c9a66"
+PIPE_NAME = fr'\\.\pipe\LOCAL\clcache-626763c0-bebe-11ed-a901-0800200c9a66-{VERSION}'
+SINGLETON_NAME = fr"Local\singleton-626763c0-bebe-11ed-a901-0800200c9a66-{VERSION}"
+PIPE_READY_EVENT = fr"Local\ready-626763c0-bebe-11ed-a901-0800200c9a66-{VERSION}"
 
 ERROR_SUCCESS = 0
 ERROR_ALREADY_EXISTS = 0xB7

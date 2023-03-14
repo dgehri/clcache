@@ -369,7 +369,7 @@ def process(cache: Cache,
                     miss_reason = MissReason.HEADER_CHANGED_MISS
                 else:
                     miss_reason = MissReason.SOURCE_CHANGED_MISS
-            except Exception as e:
+            except Exception:
                 cache.statistics.record_cache_miss(MissReason.CACHE_FAILURE)
                 raise
 
