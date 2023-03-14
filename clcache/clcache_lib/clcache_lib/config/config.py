@@ -1,7 +1,7 @@
 
 from datetime import timedelta
 
-VERSION = "4.4.0-dgehri"
+VERSION = "4.4.1-dgehri"
 CACHE_VERSION = "7"
 
 COUCHBASE_EXPIRATION = timedelta(days=3)

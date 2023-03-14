@@ -48,9 +48,11 @@ def _get_sever_timeout_seconds() -> Optional[int]:
     '''
     # ignore exception if not a valid int
     try:
-        minutes = int(os.environ.get(
-            "CLCACHE_SERVER_TIMEOUT_MINUTES", str(HASH_SERVER_TIMEOUT.min)))
-        return None if minutes < 1 else minutes * 60
+        if env_value := os.environ.get("CLCACHE_SERVER_TIMEOUT_MINUTES"):
+            minutes = int(env_value)
+            return minutes * 60 if minutes > 0 else None
+        return HASH_SERVER_TIMEOUT.seconds
+
     except ValueError:
         return None
 
