@@ -1,19 +1,19 @@
-import os
 import contextlib
 import json
 import os
 import time
-from typing import NamedTuple, Tuple, List
+from typing import List, NamedTuple, Tuple
+
 from atomicwrites import atomic_write
 
-from ..utils.util import *
 from ..cl import CommandLineAnalyzer
-from .virt import *
-from .ex import *
-from .config import Configuration
-from .stats import PersistentStats, Stats
+from ..utils.util import *
 from .cache_lock import CacheLock
+from .config import Configuration
+from .ex import *
 from .hash import *
+from .stats import PersistentStats, Stats
+from .virt import *
 
 
 class CompilerArtifacts(NamedTuple):
@@ -110,7 +110,7 @@ class ManifestSection:
         try:
             # touch manifest file to prevent it from being cleaned up
             manifest_file.touch()
-            
+
             with open(manifest_file, "r") as in_file:
                 doc = json.load(in_file)
                 return Manifest(
@@ -304,9 +304,11 @@ class CompilerArtifactsSection:
         Returns:
             A tuple of (has entry, is local cache entry).
         '''
-        return self.cache_entry_dir(key).exists(), True
+        entry_dir: Path = self.cache_entry_dir(key)
+        return entry_dir.exists() and any(entry_dir.iterdir()), True
 
     def set_entry(self, key: str, artifacts: CompilerArtifacts) -> int:
+        # sourcery skip: extract-method
         '''
         Sets the cache entry for the given key to the given artifacts.
 
@@ -318,32 +320,39 @@ class CompilerArtifactsSection:
         temp_entry_dir: Path = cache_entry_dir.parent / \
             f"{cache_entry_dir.name}.new"
 
-        remove_and_recreate_dir(temp_entry_dir)
-        size = 0
+        try:
+            remove_and_recreate_dir(temp_entry_dir)
+            size = 0
 
-        # Write the object file to file
-        if artifacts.obj_file_path is not None:
-            dst_file_path = temp_entry_dir / CompilerArtifactsSection.OBJECT_FILE
-            size = copy_to_cache(artifacts.obj_file_path, dst_file_path)
+            # Write the object file to file
+            if artifacts.obj_file_path is not None:
+                dst_file_path = temp_entry_dir / CompilerArtifactsSection.OBJECT_FILE
+                size = copy_to_cache(artifacts.obj_file_path, dst_file_path)
 
-        # Write the stdout to file
-        set_cached_compiler_console_output(
-            temp_entry_dir / CompilerArtifactsSection.STDOUT_FILE,
-            artifacts.stdout,
-        )
-        size += len(artifacts.stdout)
+            # Write the stdout to file
+            self._write_to_cache(
+                temp_entry_dir / CompilerArtifactsSection.STDOUT_FILE,
+                artifacts.stdout
+            )
+            size += len(artifacts.stdout)
 
-        # Write the stderr to file
-        if artifacts.stderr != "":
-            set_cached_compiler_console_output(temp_entry_dir / CompilerArtifactsSection.STDERR_FILE,
-                                               artifacts.stderr,
-                                               True,
-                                               )
-            size += len(artifacts.stderr)
+            # Write the stderr to file
+            if artifacts.stderr != "":
+                self._write_to_cache(temp_entry_dir / CompilerArtifactsSection.STDERR_FILE,
+                                     artifacts.stderr
+                                     )
+                size += len(artifacts.stderr)
 
-        # Replace the full cache entry atomically
-        os.replace(temp_entry_dir, cache_entry_dir)
-        return size
+            # Replace the full cache entry atomically
+            if cache_entry_dir.exists():
+                rmtree(cache_entry_dir, ignore_errors=True)
+
+            temp_entry_dir.replace(cache_entry_dir)
+            return size
+        finally:
+            # Clean up the temporary directory
+            if temp_entry_dir.exists():
+                rmtree(temp_entry_dir, ignore_errors=True)
 
     def set_entry_from_payload(self, key: str, payload: dict) -> int:
         '''
@@ -371,17 +380,15 @@ class CompilerArtifactsSection:
             size = os.path.getsize(obj_path)
 
         if "stdout" in payload:
-            set_cached_compiler_console_output(
+            self._write_to_cache(
                 temp_entry_dir / CompilerArtifactsSection.STDOUT_FILE,
-                payload["stdout"],
-                False
+                payload["stdout"]
             )
 
         if "stderr" in payload:
-            set_cached_compiler_console_output(
+            self._write_to_cache(
                 temp_entry_dir / CompilerArtifactsSection.STDERR_FILE,
-                payload["stderr"],
-                True
+                payload["stderr"]
             )
         # Replace the full cache entry atomically
         os.replace(temp_entry_dir, cache_entry_dir)
@@ -391,18 +398,31 @@ class CompilerArtifactsSection:
         hit, _ = self.has_entry(key)
         assert hit
         cache_entry_dir = self.cache_entry_dir(key)
-        
+
         # "touch" the cache entry to update its last modified time
         obj_file = cache_entry_dir / CompilerArtifactsSection.OBJECT_FILE
         obj_file.touch()
-        
+
         return CompilerArtifacts(
             obj_file,
-            get_cached_compiler_console_output(
+            self._read_from_cache(
                 cache_entry_dir / CompilerArtifactsSection.STDOUT_FILE),
-            get_cached_compiler_console_output(
-                cache_entry_dir / CompilerArtifactsSection.STDERR_FILE, True)
+            self._read_from_cache(
+                cache_entry_dir / CompilerArtifactsSection.STDERR_FILE)
         )
+
+    @staticmethod
+    def _write_to_cache(path: Path, output: str):
+        with open(path, "wb") as f:
+            f.write(output.encode())
+
+    @staticmethod
+    def _read_from_cache(path: Path) -> str:
+        try:
+            with open(path, "r") as f:
+                return f.read()
+        except IOError:
+            return ""
 
 
 class CompilerArtifactsRepository:

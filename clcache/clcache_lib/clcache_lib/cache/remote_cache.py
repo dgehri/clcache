@@ -2,23 +2,20 @@ import contextlib
 import hashlib
 import re
 from typing import Dict
-from ..cache.stats import MissReason
-import lz4.frame
 
+import lz4.frame
 from couchbase.auth import PasswordAuthenticator
 from couchbase.cluster import Bucket, Cluster
-from couchbase.options import ClusterTimeoutOptions, ClusterOptions, GetAndTouchOptions, UpsertOptions
 from couchbase.collection import Collection
+from couchbase.options import (ClusterOptions, ClusterTimeoutOptions,
+                               GetAndTouchOptions, UpsertOptions)
 
-from .couchbase_ex import RawBinaryTranscoderEx
-
-from .file_cache import *
-from ..config import (
-    COUCHBASE_EXPIRATION,
-    COUCHBASE_CONNECT_TIMEOUT,
-    COUCHBASE_GET_TIMEOUT,
-)
+from ..cache.stats import MissReason
+from ..config import (COUCHBASE_CONNECT_TIMEOUT, COUCHBASE_EXPIRATION,
+                      COUCHBASE_GET_TIMEOUT)
 from ..utils.util import trace
+from .couchbase_ex import RawBinaryTranscoderEx
+from .file_cache import *
 
 HashAlgorithm = hashlib.md5
 

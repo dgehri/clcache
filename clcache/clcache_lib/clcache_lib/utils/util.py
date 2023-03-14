@@ -1,15 +1,15 @@
 import ctypes
-from ctypes import wintypes
 import functools
-from pathlib import Path
+import os
 import sys
 import threading
+from ctypes import wintypes
+from pathlib import Path
+from shutil import copyfile, copyfileobj, rmtree, which
 from typing import Generator, Optional
+
 import lz4.frame
-import os
-from shutil import copyfile, copyfileobj, which
 import scandir
-from shutil import rmtree
 
 OUTPUT_LOCK = threading.Lock()
 

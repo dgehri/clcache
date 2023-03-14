@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import Optional
+
 from .persistent_json_dict import PersistentJsonDict
 
 

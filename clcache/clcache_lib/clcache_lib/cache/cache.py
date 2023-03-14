@@ -3,6 +3,8 @@ import os
 from pathlib import Path
 from typing import Callable, Optional, Tuple
 
+from ..config.config import VERSION
+
 from .stats import CacheStats, MissReason, PersistentStats, Stats
 from ..utils.util import trace
 from .file_cache import CacheFileStrategy, CompilerArtifacts
@@ -127,7 +129,7 @@ def is_cache_cleanup_required(cache: Cache):
 
 def print_statistics(cache: Cache):
     template = """
-clcache statistics:
+clcache {} statistics:
   current cache dir            : {}
   cache size                   : {:,.1f} MB
   maximum cache size           : {:,.0f} GB
@@ -154,6 +156,7 @@ clcache statistics:
 
     print(
         template.format(
+            VERSION,
             str(cache),
             stats.get(CacheStats.CACHE_SIZE) / 1024 / 1024,
             cfg.max_cache_size() / 1024 / 1024 / 1024,

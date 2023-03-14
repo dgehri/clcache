@@ -1,11 +1,12 @@
 import contextlib
-from pathlib import Path
-from typing import Callable, Dict
-from .cache_lock import CacheLock
-from ..utils import error
 import json
-from atomicwrites import atomic_write
 from collections import defaultdict
+from pathlib import Path
+from typing import Dict
+
+from atomicwrites import atomic_write
+
+from .cache_lock import CacheLock
 
 
 class PersistentJsonDict:

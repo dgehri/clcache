@@ -1,12 +1,13 @@
 import contextlib
-from enum import Enum
-import os
-from pathlib import Path
-import re
-from typing import List, Optional
 import functools
-from ..utils import resolve, line_iter_b, line_iter, \
-    get_short_path_name, get_long_path_name
+import os
+import re
+from enum import Enum
+from pathlib import Path
+from typing import List, Optional
+
+from ..utils import (get_long_path_name, get_short_path_name, line_iter,
+                     line_iter_b, resolve)
 from .ex import LogicException
 
 # The folowing replacement strings are used to canonicalize paths in the cache.
@@ -15,6 +16,214 @@ BUILDDIR_REPLACEMENT: str = "<BUILD_DIR>"
 CONANDIR_REPLACEMENT: str = "<CONAN_USER_HOME>"
 QTDIR_REPLACEMENT: str = "<QT_DIR>"
 LLVM_REPLACEMENT: str = "<LLVM_DIR>"
+
+
+class StdStream(Enum):
+    STDOUT = 1
+    STDERR = 2
+
+
+def expand_compile_output(compiler_output: str, stream: StdStream) -> str:
+    """Expand the canonicalized paths in the compiler output."""
+    regex = RE_STDOUT if stream == StdStream.STDOUT else RE_STDERR
+    lines = []
+    for line in line_iter(compiler_output, strip=True):
+        if match := regex.match(line):
+            file_path = expand_path(match[2])
+            line = f"{match[1]}{file_path}{line[match.end(2):]}"
+
+        lines.append(line)
+
+    lines.append("")
+    return "\r\n".join(lines)
+
+
+def canonicalize_compile_output(compiler_output: str, stream: StdStream) -> str:
+    """Canonicalize the paths in the compiler output."""
+    regex = RE_STDOUT if stream == StdStream.STDOUT else RE_STDERR
+    lines = []
+    for line in line_iter(compiler_output, strip=True):
+        if match := regex.match(line):
+            orig_path = Path(os.path.normpath(match[2])).absolute()
+            # Canonicalize the path
+            file_path = canonicalize_path(orig_path)
+            line = f"{match[1]}{file_path}{line[match.end(2):]}"
+
+        lines.append(line)
+
+    lines.append("")
+    return "\r\n".join(lines)
+
+
+@functools.cache
+def expand_path(path: str) -> Path:
+    """Expand a path, replacing placeholders with the actual values."""
+    if path.startswith(BASEDIR_REPLACEMENT):
+        if BASEDIR_STR:
+            return Path(path.replace(
+                BASEDIR_REPLACEMENT, str(BASEDIR_STR), 1))
+        else:
+            raise LogicException(
+                f"No CLCACHE_BASEDIR set, but found relative path {path}"
+            )
+    elif path.startswith(BUILDDIR_REPLACEMENT):
+        return Path(path.replace(BUILDDIR_REPLACEMENT, str(BUILDDIR_STR), 1))
+    elif CONAN_USER_HOME and path.startswith(CONANDIR_REPLACEMENT):
+        return _expand_conan_placeholder(CONAN_USER_HOME, path)
+    elif QT_DIR_STR and path.startswith(QTDIR_REPLACEMENT):
+        return Path(path.replace(QTDIR_REPLACEMENT, QT_DIR_STR, 1))
+    elif LLVM_DIR_STR and path.startswith(LLVM_REPLACEMENT):
+        return Path(path.replace(LLVM_REPLACEMENT, LLVM_DIR_STR, 1))
+    elif m := RE_ENV.match(path):
+        if real_path := _get_env_path(m.group(1)):
+            return real_path / path[m.end(0)+1:]
+        else:
+            raise LogicException(
+                f"Unable to resolve environment variable {m.group(1)}"
+            )
+    else:
+        return Path(path)
+
+
+@functools.cache
+def canonicalize_path(path: Path) -> str:
+    """Canonicalize a path by applying placeholder replacements."""
+
+    path_str = str(path).lower()
+
+    return (
+        _canonicalize_build_dir(path_str)
+        or _canonicalize_base_dir(path_str)
+        or _canonicalize_conan_dir(path_str)
+        or _canonicalize_qt_dir(path_str)
+        or _canonicalize_llvm_dir(path_str)
+        or _canonicalize_toolchain_dirs(path_str)
+        or path_str
+    )
+
+
+def subst_basedir_with_placeholder(src_code: bytes, src_dir: Path) -> bytes:
+    """Canonicalize include statements to BASE_DIR in source code
+
+       This is specifically meant to be used for:
+       - unity build source files (*_cxx.cxx)
+       - Qt moc generated files
+
+       Substitutions performed:
+       - #include <BASE_DIR/....>  =>  #include <<BASE_DIR>/....>
+       - #include "BASE_DIR/...."  =>  #include "<BASE_DIR>/...."
+       - // BASE_DIR/....          =>  // <BASE_DIR>/....
+       - the above using relative paths to BASEDIR
+
+       Parameters:
+            - src_code: source code as bytes array
+            - src_dir: directory of source code file (not the base dir!)
+
+        Returns:
+            - canonicalized source code as bytes array
+    """
+    result: List[bytes] = []
+
+    base_dir_replacement = Path(BASEDIR_REPLACEMENT)
+
+    # iterate over src_code line by line
+    line: bytes
+    for line in line_iter_b(src_code, strip=True):
+        with contextlib.suppress(UnicodeDecodeError, ValueError):
+            include_path: Optional[Path] = None
+            if m := subst_basedir_with_placeholder.INCLUDE_RE.match(line):
+                include_path = Path(m[1].decode())
+            elif m := subst_basedir_with_placeholder.COMMENT_RE.match(line):
+                include_path = Path(m[1].decode())
+
+            if include_path:
+                # test if include path is relative
+                if not include_path.is_absolute():
+                    include_path = Path(
+                        os.path.normpath(src_dir / include_path))
+
+                # check if result in base dir
+                if BASEDIR_STR and _is_in_base_dir(include_path):
+                    # get relative path to base dir
+                    include_path_rel = include_path.relative_to(BASEDIR_STR)
+
+                    # replace with placeholder
+                    line = line.replace(
+                        m[1], (base_dir_replacement / include_path_rel).as_posix().encode(), 1)
+        result.append(line)
+
+    return b'\n'.join(result)
+
+
+subst_basedir_with_placeholder.INCLUDE_RE = \
+    re.compile(br"^\s*#\s*include\s*(?:[\"<])(.*)[\">]", re.IGNORECASE)
+subst_basedir_with_placeholder.COMMENT_RE = \
+    re.compile(br"^\s*\/\/\s*([^<>|?*\"]+)$", re.IGNORECASE)
+
+
+@functools.singledispatch
+def _is_in_base_dir(path: Path, is_lower=False) -> bool:
+    return is_subdir(path, BASEDIR_STR, is_lower) or is_subdir(path, BASEDIR_RESOLVED_STR, is_lower)
+
+
+@_is_in_base_dir.register(str)
+def _(path: str, is_lower=False) -> bool:
+    return is_subdir(path, BASEDIR_STR, is_lower) or is_subdir(path, BASEDIR_RESOLVED_STR, is_lower)
+
+
+@functools.singledispatch
+def is_in_build_dir(path: Path, is_lower=False) -> bool:
+    return is_subdir(path, BUILDDIR_STR, is_lower) or is_subdir(path, BUILDDIR_RESOLVED_STR, is_lower)
+
+
+@is_in_build_dir.register(str)
+def _(path: str, is_lower=False) -> bool:
+    return is_subdir(path, BUILDDIR_STR, is_lower) or is_subdir(path, BUILDDIR_RESOLVED_STR, is_lower)
+
+
+def set_llvm_dir(compiler_path: Path) -> None:
+    re_llvm_dir = re.compile(r"^(.*)(?=\\bin\\clang-cl.exe)", re.IGNORECASE)
+
+    long_path = get_long_path_name(compiler_path)
+    if match := re_llvm_dir.match(str(long_path)):
+        global LLVM_DIR_STR
+        LLVM_DIR_STR = match[1].lower()
+
+    short_path = get_short_path_name(compiler_path)
+    if match := re_llvm_dir.match(str(short_path)):
+        global LLVM_DIR_SHORT_STR
+        LLVM_DIR_SHORT_STR = match[1].lower()
+
+
+@functools.singledispatch
+def is_subdir(path_str: str, prefix: Optional[str], is_lower=False) -> bool:
+    """Test if path is a subdirectory of parent."""
+    if not is_lower:
+        path_str = path_str.lower()
+    return bool(prefix and path_str.startswith(prefix.lower()))
+
+
+@is_subdir.register
+def _(path: Path, prefix: Optional[str], is_lower=False) -> bool:
+    return is_subdir(str(path), prefix, is_lower)
+
+
+def subst_with_placeholder(path_str: str, prefix: Optional[str], placeholder: str) -> Optional[str]:
+    """Replace path with a placeholder."""
+    assert path_str == path_str.lower()
+
+    if prefix:
+        prefix_lower = prefix.lower()
+        if path_str.startswith(prefix_lower):
+            return path_str.replace(prefix, placeholder, 1)
+
+    return None
+
+
+@functools.cache
+def _get_env_path(env: str) -> Optional[Path]:
+    '''Get a path from an environment variable, and cache the result.'''
+    return resolve(Path(value)) if (value := os.getenv(env)) else None
 
 
 @functools.cache
@@ -100,37 +309,9 @@ BASEDIR_RESOLVED_STR: Optional[str] = str(_get_dir_resolved(
     Path(BASEDIR_STR))).lower() if BASEDIR_STR else None
 
 
-def _get_diag_regex(pattern: str) -> re.Pattern[str]:
-    '''Get a regex to match a diagnostic message.'''
-    regex = rf'^([^:?*"<>|\\\/]+\s)?(?:{pattern})([^:?*"<>|]+:)'
-    return re.compile(regex, re.IGNORECASE | re.MULTILINE)
-
-
-# This is used to find the base dir in the compiler output
-BASEDIR_DIAG_RE: Optional[re.Pattern[str]] = (
-    _get_diag_regex(re.sub(r"[\\\/]", r"[\\\/]", str(BASEDIR_STR)))
-    if BASEDIR_STR is not None
-    else None
-)
-
-# This is used to replace the <BASE_DIR> placeholder with the base dir
-BASEDIR_DIAG_RE_INV: Optional[re.Pattern[str]] = (
-    _get_diag_regex(re.escape(BASEDIR_REPLACEMENT))
-    if BASEDIR_STR is not None
-    else None
-)
-
 # This is used to find the base dir in the compiler output
 BASEDIR_ESC: Optional[str] = BASEDIR_STR.replace(
     "\\", "/") if BASEDIR_STR is not None else None
-
-# This is used to find the build dir in the compiler output
-BUILDDIR_DIAG_RE: re.Pattern[str] = _get_diag_regex(
-    re.sub(r"[\\\/]", r"[\\\/]", BUILDDIR_STR))
-
-# This is used to replace the <BUILD_DIR> placeholder with the build dir
-BUILDDIR_DIAG_RE_INV: re.Pattern[str] = _get_diag_regex(
-    re.escape(BUILDDIR_REPLACEMENT))
 
 # This is the build dir, but with forward slashes
 BUILDDIR_ESC: str = BUILDDIR_STR.replace("\\", "/")
@@ -142,7 +323,9 @@ RE_STDOUT: re.Pattern = re.compile(
     r"^(\w+:\s[\s\w]+:\s+)(\S.*)$", re.IGNORECASE)
 
 RE_STDERR: re.Pattern = re.compile(
-    r"^(In file included from\s+)?([A-Z]:.*?|[^\s:][^:]*?)(?=(?:\d+(?::\d+)?|\(\d+(?:,\d+)?\)|\s\+\d+(?::\d+)?|):)",
+    r"^(In file included from\s+|)"  # optional prefix
+    + r"((?:[A-Z]:|[^\s:]|<[^>]+>)[^:<>|?*\"]*?)"  # path-like
+    + r"(?=(?:\d+(?::\d+)?|\(\d+(?:,\d+)?\)|\s\+\d+(?::\d+)?|):)",  # line number
     re.IGNORECASE,
 )
 
@@ -157,97 +340,7 @@ LLVM_DIR_STR: Optional[str] = None
 LLVM_DIR_SHORT_STR: Optional[str] = None
 
 
-def set_llvm_dir(compiler_path: Path) -> None:
-    re_llvm_dir = re.compile(r"^(.*)(?=\\bin\\clang-cl.exe)", re.IGNORECASE)
-
-    long_path = get_long_path_name(compiler_path)
-    if match := re_llvm_dir.match(str(long_path)):
-        global LLVM_DIR_STR
-        LLVM_DIR_STR = match[1].lower()
-
-    short_path = get_short_path_name(compiler_path)
-    if match := re_llvm_dir.match(str(short_path)):
-        global LLVM_DIR_SHORT_STR
-        LLVM_DIR_SHORT_STR = match[1].lower()
-
-
-@functools.singledispatch
-def is_subdir(path_str: str, prefix: Optional[str], is_lower=False) -> bool:
-    """Test if path is a subdirectory of parent."""
-    if not is_lower:
-        path_str = path_str.lower()
-    return bool(prefix and path_str.startswith(prefix.lower()))
-
-
-@is_subdir.register
-def _(path: Path, prefix: Optional[str], is_lower=False) -> bool:
-    return is_subdir(str(path), prefix, is_lower)
-
-
-def subst_with_placeholder(path_str: str, prefix: Optional[str], placeholder: str) -> Optional[str]:
-    """Replace path with a placeholder."""
-    assert path_str == path_str.lower()
-
-    if prefix:
-        prefix_lower = prefix.lower()
-        if path_str.startswith(prefix_lower):
-            return path_str.replace(prefix, placeholder, 1)
-
-    return None
-
-
-def get_cached_compiler_console_output(path: Path, translate_paths: bool = False) -> str:
-    '''
-    Read canonicalized compiler output from a file.
-
-    Parameters:
-        path: The path to the file.
-        translate_paths: Whether to expand the <BUILD_DIR> and <BASE_DIR> placeholders.
-    '''
-    try:
-        with open(path, "r") as f:
-            output: str = f.read()
-            if translate_paths:
-                # Replace the placeholder with the build dir
-                output = BUILDDIR_DIAG_RE_INV.sub(
-                    rf"\1{BUILDDIR_ESC}\2", output)
-
-                if BASEDIR_DIAG_RE_INV is not None:
-                    # Replace the placeholder with the base dir
-                    output = BASEDIR_DIAG_RE_INV.sub(
-                        rf"\1{BASEDIR_ESC}\2", output)
-            return output
-    except IOError:
-        return ""
-
-
-def set_cached_compiler_console_output(path: Path, output: str, translate_paths=False):
-    """
-    Write canonicalized compiler output to a file.
-
-    Parameters:
-        path: The path to the file.
-        translate_paths: Whether to replace the build dir and base dir with placeholders.
-    """
-    if translate_paths:
-        # Replace the build dir with a placeholder
-        output = BUILDDIR_DIAG_RE.sub(rf"\1{BUILDDIR_REPLACEMENT}\2", output)
-
-        if BASEDIR_DIAG_RE is not None:
-            # Replace the base dir with a placeholder
-            output = BASEDIR_DIAG_RE.sub(rf"\1{BASEDIR_REPLACEMENT}\2", output)
-
-    with open(path, "wb") as f:
-        f.write(output.encode())
-
-
-@functools.cache
-def get_env_path(env: str) -> Optional[Path]:
-    '''Get a path from an environment variable, and cache the result.'''
-    return resolve(Path(value)) if (value := os.getenv(env)) else None
-
-
-def expand_conan_placeholder(conan_user_home: Path, path_str: str) -> Path:
+def _expand_conan_placeholder(conan_user_home: Path, path_str: str) -> Path:
     # This case is more complicated: if the path doesn't exist, we
     # need to inspect the package directory .conan_link files, which
     # will contain the correct path
@@ -258,51 +351,21 @@ def expand_conan_placeholder(conan_user_home: Path, path_str: str) -> Path:
         os.path.sep.join(path_parts[1:9]) / ".conan_link"
 
     # check if in cache
-    if link_file not in expand_conan_placeholder.cache:
+    if link_file not in _expand_conan_placeholder.cache:
         short_path = None
         if link_file.is_file():
             with open(link_file, "r") as f:
                 short_path = Path(os.path.normpath(f.readline()))
 
-        expand_conan_placeholder.cache[link_file] = short_path
+        _expand_conan_placeholder.cache[link_file] = short_path
 
-    if short_path := expand_conan_placeholder.cache[link_file]:
+    if short_path := _expand_conan_placeholder.cache[link_file]:
         return short_path / os.path.sep.join(path_parts[9:])
     else:
         return Path(path_str.replace(CONANDIR_REPLACEMENT, str(CONAN_USER_HOME), 1))
 
 
-expand_conan_placeholder.cache = {}
-
-
-@functools.cache
-def expand_path(path: str) -> Path:
-    """Expand a path, replacing placeholders with the actual values."""
-    if path.startswith(BASEDIR_REPLACEMENT):
-        if BASEDIR_STR:
-            return Path(path.replace(
-                BASEDIR_REPLACEMENT, str(BASEDIR_STR), 1))
-        else:
-            raise LogicException(
-                f"No CLCACHE_BASEDIR set, but found relative path {path}"
-            )
-    elif path.startswith(BUILDDIR_REPLACEMENT):
-        return Path(path.replace(BUILDDIR_REPLACEMENT, str(BUILDDIR_STR), 1))
-    elif CONAN_USER_HOME and path.startswith(CONANDIR_REPLACEMENT):
-        return expand_conan_placeholder(CONAN_USER_HOME, path)
-    elif QT_DIR_STR and path.startswith(QTDIR_REPLACEMENT):
-        return Path(path.replace(QTDIR_REPLACEMENT, QT_DIR_STR, 1))
-    elif LLVM_DIR_STR and path.startswith(LLVM_REPLACEMENT):
-        return Path(path.replace(LLVM_REPLACEMENT, LLVM_DIR_STR, 1))
-    elif m := RE_ENV.match(path):
-        if real_path := get_env_path(m.group(1)):
-            return real_path / path[m.end(0)+1:]
-        else:
-            raise LogicException(
-                f"Unable to resolve environment variable {m.group(1)}"
-            )
-    else:
-        return Path(path)
+_expand_conan_placeholder.cache = {}
 
 
 def _canonicalize_base_dir(path_str: str) -> Optional[str]:
@@ -342,7 +405,7 @@ def _get_conan_user_home_short_re(hint_path: Optional[Path] = None) -> re.Patter
     return re.compile(rf"^({re_str}\\[0-9a-f]+\\1(?=\\))", re.IGNORECASE)
 
 
-def get_conan_user_home(hint_path: Optional[Path] = None) -> Path:
+def _get_conan_user_home(hint_path: Optional[Path] = None) -> Path:
     """
     Get the Conan user home directory, either from the environment or from the hint path
 
@@ -370,7 +433,7 @@ def _get_conan_user_home_re(path: Optional[Path] = None) -> re.Pattern[str]:
         Returns:
             re.Pattern[str]: a regex to match the Conan user home directory
     '''
-    home_re_str = re.escape(str(get_conan_user_home(path)))
+    home_re_str = re.escape(str(_get_conan_user_home(path)))
     return re.compile(rf"^{home_re_str}(?=\\\.conan)", re.IGNORECASE)
 
 
@@ -385,7 +448,7 @@ def _canonicalize_conan_dir(path_str: str) -> Optional[str]:
         if m := _canonicalize_conan_dir.RE_CONAN_USER_HOME_VENV.match(path_str):
             _canonicalize_conan_dir.found_venv = True
             conan_user_home_from_venv = Path(m.group(1))
-            CONAN_USER_HOME = get_conan_user_home(conan_user_home_from_venv)
+            CONAN_USER_HOME = _get_conan_user_home(conan_user_home_from_venv)
             _canonicalize_conan_dir.RE_CONAN_USER_HOME = _get_conan_user_home_re(
                 CONAN_USER_HOME)
             _canonicalize_conan_dir.RE_CONAN_USER_SHORT = _get_conan_user_home_short_re(
@@ -393,7 +456,7 @@ def _canonicalize_conan_dir(path_str: str) -> Optional[str]:
 
     # Until found a venv, use the default Conan user home
     if CONAN_USER_HOME is None:
-        CONAN_USER_HOME = get_conan_user_home()
+        CONAN_USER_HOME = _get_conan_user_home()
         _canonicalize_conan_dir.RE_CONAN_USER_HOME = _get_conan_user_home_re()
         _canonicalize_conan_dir.RE_CONAN_USER_SHORT = _get_conan_user_home_short_re()
 
@@ -496,137 +559,3 @@ def _canonicalize_llvm_dir(path_str: str) -> Optional[str]:
         return path_str.replace(LLVM_DIR_SHORT_STR, LLVM_REPLACEMENT, 1)
     else:
         return None
-
-
-@functools.cache
-def canonicalize_path(path: Path) -> str:
-    """Canonicalize a path by applying placeholder replacements."""
-
-    path_str = str(path).lower()
-
-    return (
-        _canonicalize_build_dir(path_str)
-        or _canonicalize_base_dir(path_str)
-        or _canonicalize_conan_dir(path_str)
-        or _canonicalize_qt_dir(path_str)
-        or _canonicalize_llvm_dir(path_str)
-        or _canonicalize_toolchain_dirs(path_str)
-        or path_str
-    )
-
-
-class StdStream(Enum):
-    STDOUT = 1
-    STDERR = 2
-
-
-def expand_compile_output(compiler_output: str, stream: StdStream) -> str:
-    """Expand the canonicalized paths in the compiler output."""
-    regex = RE_STDOUT if stream == StdStream.STDOUT else RE_STDERR
-    lines = []
-    for line in line_iter(compiler_output, strip=True):
-        match = regex.match(line)
-        if match is not None:
-            file_path = expand_path(match[2])
-            line = f"{match[1]}{file_path}"
-
-        lines.append(line)
-
-    lines.append("")
-    return "\r\n".join(lines)
-
-
-def canonicalize_compile_output(compiler_output: str, stream: StdStream) -> str:
-    """Canonicalize the paths in the compiler output."""
-    regex = RE_STDOUT if stream == StdStream.STDOUT else RE_STDERR
-    lines = []
-    for line in line_iter(compiler_output, strip=True):
-        if match := regex.match(line):
-            orig_path = Path(os.path.normpath(match[2])).absolute()
-            # Canonicalize the path
-            file_path = canonicalize_path(orig_path)
-            line = f"{match[1]}{file_path}"
-
-        lines.append(line)
-
-    lines.append("")
-    return "\r\n".join(lines)
-
-
-@functools.singledispatch
-def is_in_base_dir(path: Path, is_lower=False) -> bool:
-    return is_subdir(path, BASEDIR_STR, is_lower) or is_subdir(path, BASEDIR_RESOLVED_STR, is_lower)
-
-
-@is_in_base_dir.register(str)
-def _(path: str, is_lower=False) -> bool:
-    return is_subdir(path, BASEDIR_STR, is_lower) or is_subdir(path, BASEDIR_RESOLVED_STR, is_lower)
-
-
-@functools.singledispatch
-def is_in_build_dir(path: Path, is_lower=False) -> bool:
-    return is_subdir(path, BUILDDIR_STR, is_lower) or is_subdir(path, BUILDDIR_RESOLVED_STR, is_lower)
-
-
-@is_in_build_dir.register(str)
-def _(path: str, is_lower=False) -> bool:
-    return is_subdir(path, BUILDDIR_STR, is_lower) or is_subdir(path, BUILDDIR_RESOLVED_STR, is_lower)
-
-
-def subst_basedir_with_placeholder(src_code: bytes, src_dir: Path) -> bytes:
-    """Canonicalize include statements to BASE_DIR in source code
-
-       This is specifically meant to be used for:
-       - unity build source files (*_cxx.cxx)
-       - Qt moc generated files
-
-       Substitutions performed:
-       - #include <BASE_DIR/....>  =>  #include <<BASE_DIR>/....>
-       - #include "BASE_DIR/...."  =>  #include "<BASE_DIR>/...."
-       - // BASE_DIR/....          =>  // <BASE_DIR>/....
-       - the above using relative paths to BASEDIR
-
-       Parameters:
-            - src_code: source code as bytes array
-            - src_dir: directory of source code file (not the base dir!)
-
-        Returns:
-            - canonicalized source code as bytes array
-    """
-    result: List[bytes] = []
-
-    base_dir_replacement = Path(BASEDIR_REPLACEMENT)
-
-    # iterate over src_code line by line
-    line: bytes
-    for line in line_iter_b(src_code, strip=True):
-        with contextlib.suppress(UnicodeDecodeError, ValueError):
-            include_path: Optional[Path] = None
-            if m := subst_basedir_with_placeholder.INCLUDE_RE.match(line):
-                include_path = Path(m[1].decode())
-            elif m := subst_basedir_with_placeholder.COMMENT_RE.match(line):
-                include_path = Path(m[1].decode())
-
-            if include_path:
-                # test if include path is relative
-                if not include_path.is_absolute():
-                    include_path = Path(
-                        os.path.normpath(src_dir / include_path))
-
-                # check if result in base dir
-                if is_in_base_dir(include_path):
-                    # get relative path to base dir
-                    include_path_rel = include_path.relative_to(BASEDIR_STR)
-
-                    # replace with placeholder
-                    line = line.replace(
-                        m[1], (base_dir_replacement / include_path_rel).as_posix().encode(), 1)
-        result.append(line)
-
-    return b'\n'.join(result)
-
-
-subst_basedir_with_placeholder.INCLUDE_RE = \
-    re.compile(br"^\s*#\s*include\s*(?:[\"<])(.*)[\">]", re.IGNORECASE)
-subst_basedir_with_placeholder.COMMENT_RE = \
-    re.compile(br"^\s*\/\/\s*([^<>|?*\"]+)$", re.IGNORECASE)

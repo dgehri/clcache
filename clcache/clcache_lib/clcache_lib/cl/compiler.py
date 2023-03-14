@@ -1,16 +1,16 @@
 import codecs
 import multiprocessing
 import os
-from pathlib import Path
 import re
-import sys
 import subprocess
+import sys
 from collections import defaultdict
+from pathlib import Path
 from tempfile import TemporaryFile
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Dict, List, Optional, Tuple
 
-from ..utils import trace
 from ..config import CL_DEFAULT_CODEC
+from ..utils import trace
 
 
 class AnalysisError(Exception):

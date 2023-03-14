@@ -1,5 +1,7 @@
 from typing import Tuple, Union
-from couchbase.transcoder import * # type: ignore
+
+from couchbase.transcoder import *  # type: ignore
+
 
 class RawBinaryTranscoderEx(Transcoder):
     def encode_value(

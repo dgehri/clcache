@@ -1,17 +1,17 @@
+import errno
 import functools
 import hashlib
 import os
-import errno
-from pathlib import Path
 import pickle
 from ctypes import windll, wintypes
+from pathlib import Path
 from typing import List, Optional
 
 from ..cache.server import PIPE_NAME, spawn_server
+from ..config import CACHE_VERSION
 from ..config.config import HASH_SERVER_TIMEOUT
 from ..utils.util import trace
-from ..config import CACHE_VERSION
-from .virt import subst_basedir_with_placeholder, is_in_build_dir
+from .virt import is_in_build_dir, subst_basedir_with_placeholder
 
 HashAlgorithm = hashlib.md5
 BUFFER_SIZE = 65536

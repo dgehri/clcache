@@ -1,16 +1,18 @@
 # We often don't use all members of all the pyuv callbacks
 # pylint: disable=unused-argument
-from ctypes import windll, wintypes
 import hashlib
 import logging
-from pathlib import Path
 import pickle
 import signal
 import subprocess as sp
 import sys
+from ctypes import windll, wintypes
+from pathlib import Path
 from typing import Callable
-from ..config.config import VERSION
+
 import pyuv
+
+from ..config.config import VERSION
 
 BUFFER_SIZE = 65536
 PIPE_NAME = fr'\\.\pipe\LOCAL\clcache-626763c0-bebe-11ed-a901-0800200c9a66-{VERSION}'

@@ -6,12 +6,13 @@
 # full text of which is available in the accompanying LICENSE file at the
 # root directory of this project.
 #
-from clcache_lib.config import VERSION
 import argparse
 import os
-from pathlib import Path
 import sys
+from pathlib import Path
 from typing import Optional
+
+from clcache_lib.config import VERSION
 
 
 def parse_args() -> argparse.Namespace:
@@ -110,7 +111,8 @@ def main() -> int:  # sourcery skip: de-morgan, extract-duplicate-method
         server = PipeServer(timeout_s=options.run_server)
         return server.run()
 
-    from clcache_lib.cache.cache import Cache, clean_cache, clear_cache, print_statistics, reset_stats
+    from clcache_lib.cache.cache import (Cache, clean_cache, clear_cache,
+                                         print_statistics, reset_stats)
     from clcache_lib.cache.ex import LogicException
     from clcache_lib.cache.virt import set_llvm_dir
     from clcache_lib.cl.compiler import invoke_real_compiler

@@ -1,7 +1,8 @@
+from collections import defaultdict
 from enum import Enum
 from pathlib import Path
-from collections import defaultdict
 from typing import Dict
+
 from .persistent_json_dict import PersistentJsonDict
 
 
