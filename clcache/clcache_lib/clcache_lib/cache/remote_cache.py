@@ -57,7 +57,7 @@ class CacheCouchbaseStrategy:
             raise Exception("Bad bucket")
 
         if not self._bucket:
-            self._bucket = self.cluster.bucket(get_program_name())
+            self._bucket = self.cluster.bucket("clcache")
         return self._bucket
 
     @property

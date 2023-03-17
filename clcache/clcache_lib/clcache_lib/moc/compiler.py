@@ -4,11 +4,11 @@ import os
 import re
 import subprocess
 import sys
+import time
 from pathlib import Path
 from shutil import which
 from tempfile import TemporaryFile
-import time
-from typing import Callable, Dict, List, Optional, Set, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 from ..cache.cache import Cache, add_object_to_cache
 from ..cache.cache_lock import CacheLock
@@ -18,12 +18,14 @@ from ..cache.hash import get_compiler_hash, get_file_hash
 from ..cache.manifest_entry import create_manifest_entry
 from ..cache.stats import MissReason
 from ..cache.virt import (StdStream, canonicalize_compile_output,
-                          canonicalize_path, expand_compile_output, expand_path)
+                          canonicalize_path, expand_compile_output,
+                          expand_path)
 from ..config.config import CL_DEFAULT_CODEC
-from ..utils.args import (ArgumentQtLongWithParam, ArgumentQtShort, ArgumentQtLong, ArgumentQtShortWithParam,
+from ..utils.args import (ArgumentQtLong, ArgumentQtLongWithParam,
+                          ArgumentQtShort, ArgumentQtShortWithParam,
                           CommandLineAnalyzer, expand_response_file)
 from ..utils.errors import *
-from ..utils.util import copy_from_cache, line_iter, print_stdout_and_stderr, trace
+from ..utils.util import copy_from_cache, print_stdout_and_stderr, trace
 
 
 class MocCommandLineAnalyzer(CommandLineAnalyzer):

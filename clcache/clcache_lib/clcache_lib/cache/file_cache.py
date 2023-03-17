@@ -435,12 +435,11 @@ class CacheFileStrategy:
     def __init__(self, cache_dir: Optional[Path] = None):
         self.dir = cache_dir
         if not self.dir:
-            program_name = get_program_name()
             try:
-                env_var_name = f"{program_name.upper()}_DIR"
+                env_var_name = "CLCACHE_DIR"
                 self.dir = Path(os.environ[env_var_name])
             except KeyError:
-                self.dir = Path.home() / program_name
+                self.dir = Path.home() / "clcache"
 
         manifests_root_dir = self.dir / "manifests"
         ensure_dir_exists(manifests_root_dir)
@@ -464,7 +463,7 @@ class CacheFileStrategy:
 
         # also save the current stats to the build directory
         build_stats = PersistentStats(
-            Path(BUILDDIR_STR) / f"{get_program_name()}.json")
+            Path(BUILDDIR_STR) / f"clcache.json")
         build_stats.save_combined(self.current_stats)
 
     @property
