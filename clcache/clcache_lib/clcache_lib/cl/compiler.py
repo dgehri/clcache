@@ -1,172 +1,18 @@
-import codecs
 import multiprocessing
 import os
 import re
 import subprocess
 import sys
-from collections import defaultdict
 from pathlib import Path
+from shutil import which
 from tempfile import TemporaryFile
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 from ..config import CL_DEFAULT_CODEC
 from ..utils import trace
-
-
-class AnalysisError(Exception):
-    pass
-
-
-class NoSourceFileError(AnalysisError):
-    pass
-
-
-class MultipleSourceFilesComplexError(AnalysisError):
-    pass
-
-
-class CalledForLinkError(AnalysisError):
-    pass
-
-
-class CalledWithPchError(AnalysisError):
-    pass
-
-
-class ExternalDebugInfoError(AnalysisError):
-    pass
-
-
-class CalledForPreprocessingError(AnalysisError):
-    pass
-
-
-class InvalidArgumentError(AnalysisError):
-    pass
-
-
-class CommandLineTokenizer:
-    def __init__(self, content):
-        self.argv = []
-        self._content = content
-        self._pos = 0
-        self._token = ""
-        self._parser = self._initialState
-
-        while self._pos < len(self._content):
-            self._parser = self._parser(self._content[self._pos])
-            self._pos += 1
-
-        if self._token:
-            self.argv.append(self._token)
-
-    def _initialState(self, currentChar):
-        if currentChar.isspace():
-            return self._initialState
-
-        if currentChar == '"':
-            return self._quotedState
-
-        if currentChar == "\\":
-            self._parseBackslash()
-            return self._unquotedState
-
-        self._token += currentChar
-        return self._unquotedState
-
-    def _unquotedState(self, currentChar):
-        if currentChar.isspace():
-            self.argv.append(self._token)
-            self._token = ""
-            return self._initialState
-
-        if currentChar == '"':
-            return self._quotedState
-
-        if currentChar == "\\":
-            self._parseBackslash()
-            return self._unquotedState
-
-        self._token += currentChar
-        return self._unquotedState
-
-    def _quotedState(self, currentChar):
-        if currentChar == '"':
-            return self._unquotedState
-
-        if currentChar == "\\":
-            self._parseBackslash()
-            return self._quotedState
-
-        self._token += currentChar
-        return self._quotedState
-
-    def _parseBackslash(self):
-        numBackslashes = 0
-        while self._pos < len(self._content) and self._content[self._pos] == "\\":
-            self._pos += 1
-            numBackslashes += 1
-
-        followedByDoubleQuote = (
-            self._pos < len(self._content) and self._content[self._pos] == '"'
-        )
-        if followedByDoubleQuote:
-            self._token += "\\" * (numBackslashes // 2)
-            if numBackslashes % 2 == 0:
-                self._pos -= 1
-            else:
-                self._token += '"'
-        else:
-            self._token += "\\" * numBackslashes
-            self._pos -= 1
-
-
-def split_comands_file(content):
-    return CommandLineTokenizer(content).argv
-
-
-def expand_response_file(cmdline):
-    '''
-    Expand command line arguments that start with @ to the contents of the (response) file.
-    '''
-    ret = []
-
-    for arg in cmdline:
-        if len(arg) == 0:
-            continue
-        
-        if arg[0] == "@":
-            response_file = arg[1:]
-            with open(response_file, "rb") as f:
-                raw_bytes = f.read()
-
-            encoding = None
-
-            bom_to_encoding = {
-                codecs.BOM_UTF32_BE: "utf-32-be",
-                codecs.BOM_UTF32_LE: "utf-32-le",
-                codecs.BOM_UTF16_BE: "utf-16-be",
-                codecs.BOM_UTF16_LE: "utf-16-le",
-            }
-
-            for bom, enc in bom_to_encoding.items():
-                if raw_bytes.startswith(bom):
-                    encoding = enc
-                    raw_bytes = raw_bytes[len(bom):]
-                    break
-
-            if encoding:
-                response_file_content = raw_bytes.decode(encoding)
-            else:
-                response_file_content = raw_bytes.decode("UTF-8")
-
-            ret.extend(
-                expand_response_file(split_comands_file(response_file_content.strip()))
-            )
-        else:
-            ret.append(arg)
-
-    return ret
+from ..utils.args import (Argument, ArgumentNoParam, ArgumentT1, ArgumentT2, ArgumentT3,
+                          ArgumentT4, CommandLineAnalyzer, split_comands_file)
+from ..utils.errors import *
 
 
 def extend_cmdline_from_env(cmd_line: List[str],
@@ -174,10 +20,10 @@ def extend_cmdline_from_env(cmd_line: List[str],
         -> Tuple[List[str], Dict[str, str]]:
     '''
     Extend command line with CL and _CL_ environment variables
-    
+
     See https://learn.microsoft.com/en-us/cpp/build/reference/cl-environment-variables
     '''
-    
+
     _env = environment.copy()
 
     prefix = _env.pop("CL", None)
@@ -191,179 +37,99 @@ def extend_cmdline_from_env(cmd_line: List[str],
     return cmd_line, _env
 
 
-class Argument:
-    def __init__(self, name):
-        self.name = name
+class ClCommandLineAnalyzer(CommandLineAnalyzer):
 
-    def __len__(self):
-        return len(self.name)
+    def __init__(self):
 
-    def __str__(self):
-        return f"/{self.name}"
+        args_with_params = {
+            # /NAMEparameter
+            ArgumentT1("Ob"),
+            ArgumentT1("Yl"),
+            ArgumentT1("Zm"),
+            # /NAME[parameter]
+            ArgumentT2("doc"),
+            ArgumentT2("FA"),
+            ArgumentT2("FR"),
+            ArgumentT2("Fr"),
+            ArgumentT2("Gs"),
+            ArgumentT2("MP"),
+            ArgumentT2("Yc"),
+            ArgumentT2("Yu"),
+            ArgumentT2("Zp"),
+            ArgumentT2("Fa"),
+            ArgumentT2("Fd"),
+            ArgumentT2("Fe"),
+            ArgumentT2("Fi"),
+            ArgumentT2("Fm"),
+            ArgumentT2("Fo"),
+            ArgumentT2("Fp"),
+            ArgumentT2("Wv"),
+            ArgumentT2("experimental:external"),
+            ArgumentT2("external:anglebrackets"),
+            ArgumentT2("external:W"),
+            ArgumentT2("external:templates"),
+            # /NAME[ ]parameter
+            ArgumentT3("AI"),
+            ArgumentT3("D"),
+            ArgumentT3("Tc"),
+            ArgumentT3("Tp"),
+            ArgumentT3("FI"),
+            ArgumentT3("U"),
+            ArgumentT3("I"),
+            ArgumentT3("F"),
+            ArgumentT3("FU"),
+            ArgumentT3("w1"),
+            ArgumentT3("w2"),
+            ArgumentT3("w3"),
+            ArgumentT3("w4"),
+            ArgumentT3("wd"),
+            ArgumentT3("we"),
+            ArgumentT3("wo"),
+            ArgumentT3("W"),
+            ArgumentT3("V"),
+            ArgumentT3("imsvc"),
+            ArgumentT3("external:I"),
+            ArgumentT3("external:env"),
+            # /NAME parameter
+            ArgumentT4("Xclang"),
+        }
 
-    def __eq__(self, other):
-        return type(self) == type(other) and self.name == other.name
+        args_to_unify_and_sort = [
+            ("AI", True),
+            ("I", True),
+            ("FU", True),
+            ("Fo", True),
+            ("imsvc", True),
+            ("external:I", True),
+            ("external:env", False),
+            ("Xclang", False),
+            ("D", False),
+            ("MD", False),
+            ("MT", False),
+            ("W0", False),
+            ("W1", False),
+            ("W2", False),
+            ("W3", False),
+            ("W4", False),
+            ("Wall", False),
+            ("Wv", False),
+            ("WX", False),
+            ("w1", False),
+            ("w2", False),
+            ("w3", False),
+            ("w4", False),
+            ("we", False),
+            ("wo", False),
+            ("wd", False),
+            ("W", False),
+            ("Z7", False),
+            ("nologo", False),
+            ("showIncludes", False)
+        ]
 
-    def __hash__(self):
-        key = (type(self), self.name)
-        return hash(key)
+        super().__init__(args=args_with_params, args_to_unify_and_sort=args_to_unify_and_sort)
 
-
-# /NAMEparameter (no space, required parameter).
-class ArgumentT1(Argument):
-    pass
-
-
-# /NAME[parameter] (no space, optional parameter)
-class ArgumentT2(Argument):
-    pass
-
-
-# /NAME[ ]parameter (optional space)
-class ArgumentT3(Argument):
-    pass
-
-
-# /NAME parameter (required space)
-class ArgumentT4(Argument):
-    pass
-
-
-class CommandLineAnalyzer:
-
-    _args_with_params = {
-        # /NAMEparameter
-        ArgumentT1("Ob"),
-        ArgumentT1("Yl"),
-        ArgumentT1("Zm"),
-        # /NAME[parameter]
-        ArgumentT2("doc"),
-        ArgumentT2("FA"),
-        ArgumentT2("FR"),
-        ArgumentT2("Fr"),
-        ArgumentT2("Gs"),
-        ArgumentT2("MP"),
-        ArgumentT2("Yc"),
-        ArgumentT2("Yu"),
-        ArgumentT2("Zp"),
-        ArgumentT2("Fa"),
-        ArgumentT2("Fd"),
-        ArgumentT2("Fe"),
-        ArgumentT2("Fi"),
-        ArgumentT2("Fm"),
-        ArgumentT2("Fo"),
-        ArgumentT2("Fp"),
-        ArgumentT2("Wv"),
-        ArgumentT2("experimental:external"),
-        ArgumentT2("external:anglebrackets"),
-        ArgumentT2("external:W"),
-        ArgumentT2("external:templates"),
-        # /NAME[ ]parameter
-        ArgumentT3("AI"),
-        ArgumentT3("D"),
-        ArgumentT3("Tc"),
-        ArgumentT3("Tp"),
-        ArgumentT3("FI"),
-        ArgumentT3("U"),
-        ArgumentT3("I"),
-        ArgumentT3("F"),
-        ArgumentT3("FU"),
-        ArgumentT3("w1"),
-        ArgumentT3("w2"),
-        ArgumentT3("w3"),
-        ArgumentT3("w4"),
-        ArgumentT3("wd"),
-        ArgumentT3("we"),
-        ArgumentT3("wo"),
-        ArgumentT3("V"),
-        ArgumentT3("imsvc"),
-        ArgumentT3("external:I"),
-        ArgumentT3("external:env"),
-        # /NAME parameter
-        ArgumentT4("Xclang"),
-    }
-    _args_with_params_sorted = sorted(
-        _args_with_params, key=len, reverse=True)
-
-    @staticmethod
-    def _get_parametrized_arg_type(cmd_line_arg: str) -> Optional[Argument]:
-        '''
-        Get typed argument from command line argument.
-        '''
-        return next(
-            (
-                arg
-                for arg in CommandLineAnalyzer._args_with_params_sorted
-                if cmd_line_arg.startswith(arg.name, 1)
-            ),
-            None,
-        )
-
-    @staticmethod
-    def parse_args_and_input_files(cmdline: List[str]) -> Tuple[Dict[str, List[str]], List[Path]]:
-        '''
-        Parse command line arguments and input files.
-
-        Parameters:
-            cmdline: The command line to parse.
-
-        Returns:
-            A tuple of two elements: 
-            - The first element is a dictionary mapping argument names to a list of argument values. 
-            - The second element is a list of input files.
-        '''
-        arguments = defaultdict(list)
-        input_files: List[Path] = []
-        i = 0
-        while i < len(cmdline):
-            arg_str: str = cmdline[i]
-
-            # Plain arguments starting with / or -
-            if arg_str.startswith("/") or arg_str.startswith("-"):
-                arg = CommandLineAnalyzer._get_parametrized_arg_type(
-                    arg_str)
-                if arg is not None:
-                    if isinstance(arg, ArgumentT1):
-                        value = arg_str[len(arg) + 1:]
-                        if not value:
-                            raise InvalidArgumentError(
-                                f"Parameter for {arg} must not be empty"
-                            )
-                    elif isinstance(arg, ArgumentT2):
-                        value = arg_str[len(arg) + 1:]
-                    elif isinstance(arg, ArgumentT3):
-                        value = arg_str[len(arg) + 1:]
-                        if not value:
-                            value = cmdline[i + 1]
-                            i += 1
-                        elif value[0].isspace():
-                            value = value[1:]
-                    elif isinstance(arg, ArgumentT4):
-                        value = cmdline[i + 1]
-                        i += 1
-                    else:
-                        raise AssertionError("Unsupported argument type.")
-
-                    arguments[arg.name].append(value)
-                else:
-                    # name not followed by parameter in this case
-                    arg_name = arg_str[1:]
-                    arguments[arg_name].append("")
-
-            elif arg_str[0] == "@":
-                raise AssertionError(
-                    "No response file arguments (starting with @) must be left here."
-                )
-
-            else:
-                input_files.append(Path(arg_str))
-
-            i += 1
-
-        return dict(arguments), input_files
-
-    @staticmethod
-    def analyze(cmdline: List[str]) -> Tuple[List[Tuple[Path, str]], List[Path]]:
+    def analyze(self, cmdline: List[str]) -> Tuple[List[Tuple[Path, str]], List[Path]]:
         '''
         Analyzes the command line and returns a list of input and output files.
 
@@ -376,7 +142,7 @@ class CommandLineAnalyzer:
             The second list contains output (object) files.
         '''
 
-        options, orig_input_files = CommandLineAnalyzer.parse_args_and_input_files(
+        options, orig_input_files = self.parse_args_and_input_files(
             cmdline)
 
         # Use an override pattern to shadow input files that have
@@ -511,3 +277,17 @@ def job_count(cmd_line: List[str]) -> int:
     except NotImplementedError:
         # not expected to happen
         return 2
+
+
+def find_compiler_binary() -> Optional[Path]:
+    if "CLCACHE_CL" in os.environ:
+        path: Path = Path(os.environ["CLCACHE_CL"])
+
+        # If the path is not absolute, try to find it in the PATH
+        if path.name == path:
+            if p := which(path):
+                path = Path(p)
+
+        return path if path is not None and path.exists() else None
+
+    return Path(p) if (p := which("cl.exe")) else None

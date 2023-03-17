@@ -57,7 +57,7 @@ class CacheCouchbaseStrategy:
             raise Exception("Bad bucket")
 
         if not self._bucket:
-            self._bucket = self.cluster.bucket("clcache")
+            self._bucket = self.cluster.bucket(get_program_name())
         return self._bucket
 
     @property
@@ -275,8 +275,8 @@ class CacheCouchbaseStrategy:
 
 
 class CacheFileWithCouchbaseFallbackStrategy:
-    def __init__(self, url, cacheDirectory=None):
-        self.local_cache = CacheFileStrategy(cache_dir=cacheDirectory)
+    def __init__(self, url, cache_dir=None):
+        self.local_cache = CacheFileStrategy(cache_dir=cache_dir)
         self.remote_cache = CacheCouchbaseStrategy(url)
 
     def __enter__(self):

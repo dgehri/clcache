@@ -83,7 +83,7 @@ def parse_args() -> argparse.Namespace:
         action=CommandCheckAction,
         nargs="?",
         help="Optional path to compile executable. If not "
-        "present look in CLCACHE_CL environment variable "
+        "present look in MOCCACHE_MOC environment variable "
         "or search PATH for exe.",
     )
     parser.add_argument(
@@ -114,10 +114,8 @@ def main() -> int:  # sourcery skip: de-morgan, extract-duplicate-method
     from clcache_lib.cache.cache import (Cache, clean_cache, clear_cache,
                                          print_statistics, reset_stats)
     from clcache_lib.cache.ex import LogicException
-    from clcache_lib.cache.virt import set_llvm_dir
-    from clcache_lib.cl.compiler import invoke_real_compiler, find_compiler_binary
-    from clcache_lib.cl.clcache import process_compile_request
     from clcache_lib.utils.util import trace
+    from clcache_lib.moc.compiler import find_compiler_binary, invoke_real_compiler, process_compile_request
 
     with Cache() as cache:
 
@@ -165,19 +163,16 @@ def main() -> int:  # sourcery skip: de-morgan, extract-duplicate-method
         compiler: Optional[Path] = options.compiler or find_compiler_binary()
         if not (compiler and os.access(compiler, os.F_OK)):
             print(
-                "Failed to locate specified compiler, or exe on PATH (and CLCACHE_CL is not set), aborting."
+                "Failed to locate specified compiler, or exe on PATH (and MOCCACHE_MOC is not set), aborting."
             )
             return 1
-
-        # Extract the compiler folder from the compiler path
-        set_llvm_dir(compiler)
 
         trace("Found real compiler binary at '{0!s}'".format(compiler))
         trace(f"Arguments we care about: '{sys.argv}'")
 
         # Determine CL_
 
-        if "CLCACHE_DISABLE" in os.environ:
+        if "MOCCACHE_DISABLE" in os.environ:
             return invoke_real_compiler(compiler, options.compiler_args)[0]
         try:
             return process_compile_request(cache, compiler, options.compiler_args)

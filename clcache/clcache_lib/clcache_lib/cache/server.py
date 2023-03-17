@@ -14,10 +14,17 @@ import pyuv
 
 from ..config.config import VERSION
 
+# Not the same as VERSION !
+# If you change the server version, you may want 
+# to change this to simply 2, 3, ... to avoid confusion
+SERVER_VERSION = "4.4.2-dgehri"
+
+PIPE_NAME = fr'\\.\pipe\LOCAL\clcache-626763c0-bebe-11ed-a901-0800200c9a66-{SERVER_VERSION}'
+SINGLETON_NAME = fr"Local\singleton-626763c0-bebe-11ed-a901-0800200c9a66-{SERVER_VERSION}"
+PIPE_READY_EVENT = fr"Local\ready-626763c0-bebe-11ed-a901-0800200c9a66-{SERVER_VERSION}"
+
+
 BUFFER_SIZE = 65536
-PIPE_NAME = fr'\\.\pipe\LOCAL\clcache-626763c0-bebe-11ed-a901-0800200c9a66-{VERSION}'
-SINGLETON_NAME = fr"Local\singleton-626763c0-bebe-11ed-a901-0800200c9a66-{VERSION}"
-PIPE_READY_EVENT = fr"Local\ready-626763c0-bebe-11ed-a901-0800200c9a66-{VERSION}"
 
 ERROR_SUCCESS = 0
 ERROR_ALREADY_EXISTS = 0xB7
@@ -52,7 +59,7 @@ class HashCache:
         return file_hash
 
     def _start_watching(self, directory: Path):
-        handler = pyuv.fs.FSEvent(self._loop)
+        handler = pyuv.fs.FSEvent(self._loop)  # type: ignore
         handler.start(str(directory), 0, self._on_path_change)
         self._handlers.append(handler)
 
@@ -232,7 +239,7 @@ def spawn_server(server_idle_timeout_s: int, wait_time_s: int = 10):
                 f"--run-server={server_idle_timeout_s}",
             )
         )
-        
+
         p = sp.Popen(
             args, creationflags=sp.CREATE_NEW_PROCESS_GROUP | sp.CREATE_NO_WINDOW)
         return p.pid != 0 and ready_event.wait(wait_time_s*1000)

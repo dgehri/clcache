@@ -5,13 +5,17 @@ import sys
 import threading
 from ctypes import wintypes
 from pathlib import Path
-from shutil import copyfile, copyfileobj, rmtree, which
-from typing import Generator, Optional
+from shutil import copyfile, copyfileobj, rmtree
+from typing import Generator
 
 import lz4.frame
 import scandir
 
 OUTPUT_LOCK = threading.Lock()
+
+
+def get_program_name() -> str:
+    return Path(sys.argv[0]).stem
 
 
 def print_binary(stream, data: bytes):
@@ -150,20 +154,6 @@ def line_iter_b(str: bytes, strip=False) -> Generator[bytes, None, None]:
         pos = next_pos
 
 
-def find_compiler_binary() -> Optional[Path]:
-    if "CLCACHE_CL" in os.environ:
-        path: Path = Path(os.environ["CLCACHE_CL"])
-
-        # If the path is not absolute, try to find it in the PATH
-        if path.name == path:
-            if p := which(path):
-                path = Path(p)
-
-        return path if path is not None and path.exists() else None
-
-    return Path(p) if (p := which("cl.exe")) else None
-
-
 def copy_from_cache(src_file: Path, dst_file: Path):
     '''
     Copy a file from the cache.
@@ -220,3 +210,8 @@ def trace(msg: str, level=1) -> None:
 def error(message: str):
     with OUTPUT_LOCK:
         print(message, file=sys.stderr, flush=True)
+
+
+def print_stdout_and_stderr(out: str, err: str, encoding: str):
+    print_binary(sys.stdout, out.encode(encoding))
+    print_binary(sys.stderr, err.encode(encoding))

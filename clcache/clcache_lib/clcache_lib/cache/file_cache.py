@@ -6,7 +6,6 @@ from typing import List, NamedTuple, Tuple
 
 from atomicwrites import atomic_write
 
-from ..cl import CommandLineAnalyzer
 from ..utils.util import *
 from .cache_lock import CacheLock
 from .config import Configuration
@@ -184,72 +183,6 @@ class ManifestRepository:
             else:
                 os.remove(filepath)
         return remaining_obj_size
-
-    @staticmethod
-    def get_manifest_hash(compiler_path: Path, cmd_line: List[str], src_file: Path) -> str:
-        '''
-        Returns a hash of the manifest file that would be used for the given command line.
-        '''
-        compiler_hash = get_compiler_hash(compiler_path)
-
-        # NOTE: We intentionally do not normalize command line to include
-        # preprocessor options.  In direct mode we do not perform preprocessing
-        # before cache lookup, so all parameters are important.  One of the few
-        # exceptions to this rule is the /MP switch, which only defines how many
-        # compiler processes are running simultaneusly.  Arguments that specify
-        # the compiler where to find the source files are parsed to replace
-        # ocurrences of CLCACHE_BASEDIR and CLCACHE_BUILDDIR by a placeholder.
-        (
-            args,
-            input_files,
-        ) = CommandLineAnalyzer.parse_args_and_input_files(cmd_line)
-
-        def canonicalize_path_arg(arg: Path):
-            return canonicalize_path(arg.absolute())
-
-        cmd_line = []
-        args_with_paths = ("AI", "I", "FU", "external:I", "imsvc")
-        args_to_unify_and_sort = (
-            "D",
-            "MD",
-            "MT",
-            "W0",
-            "W1",
-            "W2",
-            "W3",
-            "W4",
-            "Wall",
-            "Wv",
-            "WX",
-            "w1",
-            "w2",
-            "w3",
-            "w4",
-            "we",
-            "wo",
-            "wd",
-            "Z7",
-            "nologo",
-            "showIncludes",
-        )
-        for k in sorted(args.keys()):
-            if k in args_with_paths:
-                cmd_line.extend(
-                    [f"/{k}{canonicalize_path_arg(Path(arg))}" for arg in args[k]]
-                )
-            elif k in args_to_unify_and_sort:
-                cmd_line.extend(
-                    [f"/{k}{arg}" for arg in list(dict.fromkeys(args[k]))]
-                )
-            else:
-                cmd_line.extend([f"/{k}{arg}" for arg in args[k]])
-
-        cmd_line.extend(canonicalize_path_arg(arg) for arg in input_files)
-
-        toolset_data = "{}|{}|{}".format(
-            compiler_hash, cmd_line, ManifestRepository.MANIFEST_FILE_FORMAT_VERSION
-        )
-        return get_file_hash(src_file, toolset_data)
 
     @staticmethod
     def get_includes_content_hash_for_files(includes: List[Path]) -> str:
@@ -502,10 +435,12 @@ class CacheFileStrategy:
     def __init__(self, cache_dir: Optional[Path] = None):
         self.dir = cache_dir
         if not self.dir:
+            program_name = get_program_name()
             try:
-                self.dir = Path(os.environ["CLCACHE_DIR"])
+                env_var_name = f"{program_name.upper()}_DIR"
+                self.dir = Path(os.environ[env_var_name])
             except KeyError:
-                self.dir = Path.home() / "clcache"
+                self.dir = Path.home() / program_name
 
         manifests_root_dir = self.dir / "manifests"
         ensure_dir_exists(manifests_root_dir)
@@ -528,7 +463,8 @@ class CacheFileStrategy:
         self.persistent_stats.save_combined(self.current_stats)
 
         # also save the current stats to the build directory
-        build_stats = PersistentStats(Path(BUILDDIR_STR) / "clcache.json")
+        build_stats = PersistentStats(
+            Path(BUILDDIR_STR) / f"{get_program_name()}.json")
         build_stats.save_combined(self.current_stats)
 
     @property

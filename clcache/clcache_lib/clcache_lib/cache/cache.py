@@ -16,7 +16,7 @@ class Cache:
             try:
                 from .remote_cache import CacheFileWithCouchbaseFallbackStrategy
                 self.strategy = CacheFileWithCouchbaseFallbackStrategy(
-                    url, cacheDirectory=cache_dir)
+                    url, cache_dir=cache_dir)
                 return
             except Exception as e:
                 trace(f"Failed to initialize Couchbase cache using {url}")

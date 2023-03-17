@@ -1,59 +1,18 @@
 
-from .cache import *  # type: ignore
-from .cl import *  # type: ignore
-from .cache.file_cache import CompilerArtifactsRepository, ManifestEntry, ManifestRepository
-from .cache.hash import get_file_hashes
-from .cache.virt import StdStream, canonicalize_path, expand_compile_output
-from .utils.util import copy_from_cache, line_iter, trace
-from .cache.cache import Cache
-
-from pathlib import Path
+import concurrent.futures
 import re
 import time
+from pathlib import Path
 from typing import Iterator, List, Set, Tuple
-import concurrent.futures
 
-def parse_includes_set(compiler_output: str, src_file: Path, strip: bool) -> Tuple[List[Path], str]:
-    """
-    Parse the compiler output and return a set of include file paths.
-
-        Parameters:
-            compiler_output: The compiler output to parse.
-            src_file: The source file that was compiled.
-            strip: If True, remove all lines with include directives from the output.
-
-        Returns:
-            A tuple of a set of include file paths and the compiler output with or without include directives.
-    """
-    filtered_output = []
-    include_set: Set[Path] = set()
-
-    # Example lines
-    # Note: including file:         C:\Program Files (x86)\Microsoft Visual Studio 12.0\VC\INCLUDE\limits.h
-    # Hinweis: Einlesen der Datei:   C:\Program Files (x86)\Microsoft Visual Studio 12.0\VC\INCLUDE\iterator
-    #
-    # So we match
-    # - one word (translation of "note")
-    # - colon
-    # - space
-    # - a phrase containing characters and spaces (translation of "including file")
-    # - colon
-    # - one or more spaces
-    # - the file path, starting with a non-whitespace character
-    regex = re.compile(r"^(\w+): ([ \w]+):( +)(?P<file_path>\S.*)$")
-
-    abs_src_file = src_file.absolute()
-    for line in line_iter(compiler_output):
-        if m := regex.match(line.rstrip("\r\n")):
-            file_path = Path(os.path.normpath(m["file_path"])).absolute()
-            if file_path != abs_src_file:
-                include_set.add(file_path)
-        elif strip:
-            filtered_output.append(line)
-    if strip:
-        return list(include_set), "".join(filtered_output)
-    else:
-        return list(include_set), compiler_output
+from ..cache import *  # type: ignore
+from ..cache.cache import Cache
+from ..cache.file_cache import (ManifestRepository)
+from ..cache.manifest_entry import create_manifest_entry
+from ..cache.virt import StdStream, canonicalize_path, expand_compile_output
+from ..utils.args import expand_response_file
+from ..utils.util import copy_from_cache, line_iter, trace
+from . import *  # type: ignore
 
 
 def process_cache_hit(cache: Cache, is_local: bool, obj_file: Path, cache_key: str) -> Tuple[int, str, str]:
@@ -100,25 +59,6 @@ def process_cache_hit(cache: Cache, is_local: bool, obj_file: Path, cache_key: s
         )
 
 
-def create_manifest_entry(manifest_hash: str, include_paths: List[Path]) -> ManifestEntry:
-    """
-    Create a manifest entry for the given manifest hash and include paths.
-    """
-
-    sorted_include_paths = sorted(set(include_paths))
-    include_hashes = get_file_hashes(sorted_include_paths)
-
-    safe_includes = [canonicalize_path(path) for path in sorted_include_paths]
-    content_hash = ManifestRepository.get_includes_content_hash_for_hashes(
-        include_hashes
-    )
-    cachekey = CompilerArtifactsRepository.compute_key(
-        manifest_hash, content_hash
-    )
-
-    return ManifestEntry(safe_includes, content_hash, cachekey)
-
-
 def process_compile_request(cache: Cache, compiler: Path, args: List[str]) -> int:
     '''
     Process a compile request.
@@ -133,9 +73,10 @@ def process_compile_request(cache: Cache, compiler: Path, args: List[str]) -> in
     trace("Expanded commandline '{0!s}'".format(cmdline))
 
     try:
-        src_files, obj_files = CommandLineAnalyzer.analyze(cmdline)
+        analyzer = ClCommandLineAnalyzer()
+        src_files, obj_files = analyzer.analyze(cmdline)
         return schedule_jobs(
-            cache, compiler, cmdline, environment, src_files, obj_files
+            cache, compiler, cmdline, environment, src_files, obj_files, analyzer
         )
     except InvalidArgumentError:
         trace(f"Cannot cache invocation as {cmdline}: invalid argument")
@@ -168,7 +109,7 @@ def process_compile_request(cache: Cache, compiler: Path, args: List[str]) -> in
         cache.statistics.record_cache_miss(MissReason.CALL_FOR_PREPROCESSING)
 
     exit_code, out, err = invoke_real_compiler(compiler, args)
-    print_stdout_and_stderr(out, err)
+    print_stdout_and_stderr(out, err, CL_DEFAULT_CODEC)
     return exit_code
 
 
@@ -201,6 +142,7 @@ def schedule_jobs(
     environment: Dict[str, str],
     src_files: List[Tuple[Path, str]],
     obj_files: List[Path],
+    analyzer: ClCommandLineAnalyzer
 ) -> int:
     '''
     Schedule jobs for the given command line.
@@ -231,10 +173,10 @@ def schedule_jobs(
         obj_file = obj_files[0]
         job_cmdline = base_cmdline + [src_language + str(src_file)]
         exit_code, out, err = process_single_source(
-            cache, compiler, job_cmdline, src_file, obj_file, environment
+            cache, compiler, job_cmdline, src_file, obj_file, environment, analyzer
         )
         trace("Finished. Exit code {0:d}".format(exit_code))
-        print_stdout_and_stderr(out, err)
+        print_stdout_and_stderr(out, err, CL_DEFAULT_CODEC)
     else:
         with concurrent.futures.ThreadPoolExecutor(
             max_workers=job_count(cmd_line)
@@ -251,12 +193,13 @@ def schedule_jobs(
                         src_file,
                         obj_file,
                         environment,
+                        analyzer
                     )
                 )
             for future in concurrent.futures.as_completed(jobs):
                 exit_code, out, err = future.result()
                 trace("Finished. Exit code {0:d}".format(exit_code))
-                print_stdout_and_stderr(out, err)
+                print_stdout_and_stderr(out, err, CL_DEFAULT_CODEC)
 
                 if exit_code != 0:
                     break
@@ -269,7 +212,8 @@ def process_single_source(cache: Cache,
                           cmdline: List[str],
                           src_file: Path,
                           obj_file: Path,
-                          environment: Optional[Dict[str, str]]) \
+                          environment: Optional[Dict[str, str]],
+                          analyzer: ClCommandLineAnalyzer) \
         -> Tuple[int, str, str]:
     '''
     Process a single source file.
@@ -287,7 +231,7 @@ def process_single_source(cache: Cache,
     '''
     try:
         assert obj_file is not None
-        return process(cache, obj_file, compiler, cmdline, src_file)
+        return process(cache, obj_file, compiler, cmdline, src_file, analyzer)
 
     except CompilerFailedException as e:
         return e.get_compiler_result()
@@ -300,7 +244,8 @@ def process(cache: Cache,
             obj_file: Path,
             compiler_path: Path,
             cmdline: List[str],
-            src_file: Path) -> Tuple[int, str, str]:
+            src_file: Path,
+            analyzer: ClCommandLineAnalyzer) -> Tuple[int, str, str]:
     '''
     Process a single source file.
 
@@ -315,8 +260,8 @@ def process(cache: Cache,
     '''
 
     # Get manifest hash
-    manifest_hash: str = ManifestRepository.get_manifest_hash(
-        compiler_path, cmdline, src_file)
+    manifest_hash: str = _get_manifest_hash(
+        compiler_path, cmdline, src_file, analyzer)
 
     # Acquire lock for manifest hash to prevent two jobs from compiling the same source
     # file at the same time. This is a frequent situation on Jenkins, and having the 2nd
@@ -341,7 +286,7 @@ def process(cache: Cache,
                             includes_content_hash = (
                                 ManifestRepository.get_includes_content_hash_for_files(
                                     [expand_path(path)
-                                    for path in entry.includeFiles]
+                                     for path in entry.includeFiles]
                                 )
                             )
 
@@ -399,7 +344,7 @@ def process(cache: Cache,
                 compiler_path, cmdline, capture_output=True)
 
             # Create manifest entry
-            include_paths, stripped_compiler_out = parse_includes_set(
+            include_paths, stripped_compiler_out = _parse_includes_set(
                 compiler_out, src_file, strip_includes
             )
             compiler_result = (
@@ -468,6 +413,88 @@ def ensure_artifacts_exist(cache: Cache, cache_key: str,
     return return_code, compiler_stdout, compiler_stderr
 
 
-def print_stdout_and_stderr(out: str, err: str):
-    print_binary(sys.stdout, out.encode(CL_DEFAULT_CODEC))
-    print_binary(sys.stderr, err.encode(CL_DEFAULT_CODEC))
+def _get_manifest_hash(compiler_path: Path,
+                       cmd_line: List[str],
+                       src_file: Path,
+                       analyzer: ClCommandLineAnalyzer) -> str:
+    '''
+    Returns a hash of the manifest file that would be used for the given command line.
+    '''
+    compiler_hash = get_compiler_hash(compiler_path)
+
+    (
+        args,
+        input_files,
+    ) = ClCommandLineAnalyzer().parse_args_and_input_files(cmd_line)
+
+    def canonicalize_path_arg(arg: Path):
+        return canonicalize_path(arg.absolute())
+
+    cmd_line = []
+
+    args_to_unify_and_sort = analyzer.get_args_to_unify_and_sort()
+
+    # We only sort the arguments, not their values because the
+    # order of the latter may change the compiler result.
+    for k in sorted(args.keys()):
+        if k in args_to_unify_and_sort:
+            if args_to_unify_and_sort[k]:
+                cmd_line.extend(
+                    [f"/{k}{canonicalize_path_arg(Path(value))}" for value in args[k]]
+                )
+            else:
+                cmd_line.extend(
+                    [f"/{k}{value}" for value in list(dict.fromkeys(args[k]))]
+                )
+        else:
+            cmd_line.extend([f"/{k}{value}" for value in args[k]])
+
+    cmd_line.extend(canonicalize_path_arg(value) for value in input_files)
+
+    toolset_data = "{}|{}|{}".format(
+        compiler_hash, cmd_line, ManifestRepository.MANIFEST_FILE_FORMAT_VERSION
+    )
+    return get_file_hash(src_file, toolset_data)
+
+
+def _parse_includes_set(compiler_output: str, src_file: Path, strip: bool) -> Tuple[List[Path], str]:
+    """
+    Parse the compiler output and return a set of include file paths.
+
+        Parameters:
+            compiler_output: The compiler output to parse.
+            src_file: The source file that was compiled.
+            strip: If True, remove all lines with include directives from the output.
+
+        Returns:
+            A tuple of a set of include file paths and the compiler output with or without include directives.
+    """
+    filtered_output = []
+    include_set: Set[Path] = set()
+
+    # Example lines
+    # Note: including file:         C:\Program Files (x86)\Microsoft Visual Studio 12.0\VC\INCLUDE\limits.h
+    # Hinweis: Einlesen der Datei:   C:\Program Files (x86)\Microsoft Visual Studio 12.0\VC\INCLUDE\iterator
+    #
+    # So we match
+    # - one word (translation of "note")
+    # - colon
+    # - space
+    # - a phrase containing characters and spaces (translation of "including file")
+    # - colon
+    # - one or more spaces
+    # - the file path, starting with a non-whitespace character
+    regex = re.compile(r"^(\w+): ([ \w]+):( +)(?P<file_path>\S.*)$")
+
+    abs_src_file = src_file.absolute()
+    for line in line_iter(compiler_output):
+        if m := regex.match(line.rstrip("\r\n")):
+            file_path = Path(os.path.normpath(m["file_path"])).absolute()
+            if file_path != abs_src_file:
+                include_set.add(file_path)
+        elif strip:
+            filtered_output.append(line)
+    if strip:
+        return list(include_set), "".join(filtered_output)
+    else:
+        return list(include_set), compiler_output
