@@ -255,22 +255,22 @@ class CommandLineAnalyzer:
                     if isinstance(arg, (ArgumentQtShort, ArgumentQtLong)):
                         value=None
                     elif isinstance(arg, (ArgumentQtShortWithParam, ArgumentQtLongWithParam)):
-                        value=arg_str[len(arg) + 1:]
+                        value=arg_str[len(str(arg)):]
                         if not value:
                             value=cmdline[i + 1]
                             i += 1
-                        elif value[0].isspace():
+                        elif value[0].isspace() or value[0] == "=":
                             value=value[1:]
                     elif isinstance(arg, ArgumentT1):
-                        value=arg_str[len(arg) + 1:]
+                        value=arg_str[len(str(arg)):]
                         if not value:
                             raise InvalidArgumentError(
                                 f"Parameter for {arg} must not be empty"
                             )
                     elif isinstance(arg, ArgumentT2):
-                        value = arg_str[len(arg) + 1:]
+                        value = arg_str[len(str(arg)):]
                     elif isinstance(arg, ArgumentT3):
-                        value = arg_str[len(arg) + 1:]
+                        value = arg_str[len(str(arg)):]
                         if not value:
                             value = cmdline[i + 1]
                             i += 1

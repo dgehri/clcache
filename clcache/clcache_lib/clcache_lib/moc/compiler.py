@@ -106,7 +106,7 @@ class MocCommandLineAnalyzer(CommandLineAnalyzer):
         super().__init__(args=args,
                          args_to_unify_and_sort=args_to_unify_and_sort)
 
-    def analyze(self, cmdline: List[str]) -> Tuple[Path, Optional[Path]]:
+    def analyze(self, cmdline: List[str]) -> Tuple[Path, Optional[Path], Dict[str, List[str]]]:
         '''
         Analyzes the command line and returns a list of input and output files.
 
@@ -129,13 +129,16 @@ class MocCommandLineAnalyzer(CommandLineAnalyzer):
         if "E" in options:
             raise CalledForPreprocessingError()
 
+        if "output-json" in options or "collect-json" in options:
+            raise CalledForJsonOutputError()
+
         output_file = None
         if "o" in options and options["o"][0]:
             output_file = Path(options["o"][0])
 
         trace(f"MOC input file: {input_file}")
         trace(f"MOC output file: {output_file}")
-        return input_file, output_file
+        return input_file, output_file, options
 
 
 def find_compiler_binary() -> Optional[Path]:
@@ -225,9 +228,10 @@ def process_compile_request(cache: Cache, compiler: Path, args: List[str]) -> in
 
     try:
         analyzer = MocCommandLineAnalyzer()
-        header_file, output_file = analyzer.analyze(cmdline)
+        header_file, output_file, options = analyzer.analyze(cmdline)
         return _schedule_jobs(
-            cache, compiler, cmdline, environment, header_file, output_file, analyzer
+            cache, compiler, cmdline, environment,
+            header_file, output_file, analyzer, options
         )
     except InvalidArgumentError:
         trace(f"Cannot cache invocation as {cmdline}: invalid argument")
@@ -259,6 +263,11 @@ def process_compile_request(cache: Cache, compiler: Path, args: List[str]) -> in
             f"Cannot cache invocation as {cmdline}: called for preprocessing")
         cache.statistics.record_cache_miss(MissReason.CALL_FOR_PREPROCESSING)
 
+    except CalledForJsonOutputError:
+        trace(
+            f"Cannot cache invocation as {cmdline}: called for JSON output")
+        cache.statistics.record_cache_miss(MissReason.CALL_FOR_PREPROCESSING)
+
     exit_code, out, err = invoke_real_compiler(compiler, args)
     print_stdout_and_stderr(out, err, CL_DEFAULT_CODEC)
     return exit_code
@@ -271,7 +280,8 @@ def _schedule_jobs(
     environment: Dict[str, str],
     header_file: Path,
     output_file: Optional[Path],
-    analyzer: MocCommandLineAnalyzer
+    analyzer: MocCommandLineAnalyzer,
+    options: Dict[str, List[str]]
 ) -> int:
     '''
     Schedule jobs for the given command line.
@@ -280,7 +290,8 @@ def _schedule_jobs(
     '''
     exit_code: int = 0
     exit_code, out, err = _process_single_source(
-        cache, compiler, cmd_line, header_file, output_file, environment, analyzer
+        cache, compiler, cmd_line, header_file,
+        output_file, environment, analyzer, options
     )
     trace("Finished. Exit code {0:d}".format(exit_code))
     print_stdout_and_stderr(out, err, CL_DEFAULT_CODEC)
@@ -294,7 +305,8 @@ def _process_single_source(cache: Cache,
                            header_file: Path,
                            output_file: Optional[Path],
                            environment: Optional[Dict[str, str]],
-                           analyzer: MocCommandLineAnalyzer) \
+                           analyzer: MocCommandLineAnalyzer,
+                           options: Dict[str, List[str]]) \
         -> Tuple[int, str, str]:
     '''
     Process a single source file.
@@ -303,7 +315,7 @@ def _process_single_source(cache: Cache,
     '''
     try:
         assert output_file is not None
-        return _process(cache, output_file, compiler, cmdline, header_file, analyzer)
+        return _process(cache, output_file, compiler, cmdline, header_file, analyzer, options)
 
     except CompilerFailedException as e:
         return e.get_compiler_result()
@@ -317,7 +329,8 @@ def _process(cache: Cache,
              compiler_path: Path,
              cmdline: List[str],
              header_file: Path,
-             analyzer: MocCommandLineAnalyzer) -> Tuple[int, str, str]:
+             analyzer: MocCommandLineAnalyzer,
+             options: Dict[str, List[str]]) -> Tuple[int, str, str]:
     '''
     Process a single source file.
 
@@ -381,7 +394,25 @@ def _process(cache: Cache,
                                 hit, _ = cache.has_entry(cachekey)
                                 if hit:
                                     # Object cache hit!
-                                    return _process_cache_hit(cache, output_file, cachekey, entry.includeFiles)
+                                    result = _process_cache_hit(
+                                        cache, output_file, cachekey)
+
+                                    if "output-dep-file" in options:
+                                        # Determine depencency file path
+                                        dep_file_path = output_file.parent / \
+                                            f"{output_file.name}.d"
+                                        _safe_unlink(dep_file_path)
+
+                                        # Determine target name
+                                        rule_name = output_file
+                                        if "dep-file-rule-name" in options:
+                                            rule_name = Path(options["dep-file-rule-name"][0])
+
+                                        # create depencency file
+                                        _create_dep_file(
+                                            dep_file_path, rule_name, entry.includeFiles)
+
+                                    return result
 
                     miss_reason = MissReason.HEADER_CHANGED_MISS
                 else:
@@ -405,8 +436,6 @@ def _process(cache: Cache,
             # Also generate manifest
             remove_dep_file = False
             if "--output-dep-file" not in cmdline:
-                # Ensure compiler dumps include files, but strip them
-                # before printing to stdout, unless --show-includes is used
                 cmdline = list(cmdline)
                 cmdline.insert(0, "--output-dep-file")
                 remove_dep_file = True
@@ -485,7 +514,10 @@ def ensure_artifacts_exist(cache: Cache, cache_key: str,
     return return_code, compiler_stdout, compiler_stderr
 
 
-def _get_manifest_hash(compiler_path: Path, cmd_line: List[str], src_file: Path, analyzer: MocCommandLineAnalyzer) -> str:
+def _get_manifest_hash(compiler_path: Path,
+                       cmd_line: List[str],
+                       src_file: Path,
+                       analyzer: MocCommandLineAnalyzer) -> str:
     '''
     Returns a hash of the manifest file that would be used for the given command line.
     '''
@@ -543,35 +575,36 @@ def _safe_unlink(path: Path) -> None:
 
     if not success:
         path.unlink()
-        
-def _create_dep_file(dep_file_path: Path, 
-                     obj_file: Path,
-                     include_paths: List[Path]) -> None:
+
+
+def _create_dep_file(dep_file_path: Path,
+                     rule: Path,
+                     include_paths: List[str]) -> None:
+    """Create a dependency file."""
     with dep_file_path.open("w") as dep_file:
-        dep_file.write(f"{obj_file.as_posix()}: ")
+        dep_file.write(f"{rule.as_posix()}: ")
 
         for include_path in include_paths:
             # expand include_path
             expanded_include_path = expand_path(include_path)
-            
+
             dep_file.write(f" \\\n  {expanded_include_path.as_posix()}")
-            
+
         dep_file.write("\n")
 
 
-def _process_cache_hit(cache: Cache, 
-                       obj_file: Path, 
-                       cache_key: str,
-                       include_files: List[Path]) \
-                           -> Tuple[int, str, str]:
+def _process_cache_hit(cache: Cache,
+                       obj_file: Path,
+                       cache_key: str) \
+        -> Tuple[int, str, str]:
     """
     Process a cache hit, copying the object file from the cache to the output directory.
 
         Parameters:
             cache: The cache to use.
-            is_local: True if the cache is local, False if it is remote.
             obj_file: The object file to write.
             cache_key: The cache key to use.
+            include_files: The list of include files to write to the depencency file.
 
         Returns:
             A tuple of the exit code, the stdout, the stderr
@@ -582,20 +615,13 @@ def _process_cache_hit(cache: Cache,
     with cache.lock_for(cache_key):
         cache.statistics.record_cache_hit()
 
-        # Determine depencency file path
-        dep_file_path = obj_file.parent / f"{obj_file.name}.d"
-        
         _safe_unlink(obj_file)
-        _safe_unlink(dep_file_path)
 
         cached_artifacts = cache.get_entry(cache_key)
         assert cached_artifacts is not None
 
         copy_from_cache(cached_artifacts.obj_file_path, obj_file)
-        
-        # create depencency file
-        _create_dep_file(dep_file_path, obj_file, include_files)
-        
+
         trace("Finished. Exit code 0")
         return (
             0,

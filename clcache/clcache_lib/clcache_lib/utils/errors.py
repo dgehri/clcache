@@ -26,6 +26,8 @@ class ExternalDebugInfoError(AnalysisError):
 class CalledForPreprocessingError(AnalysisError):
     pass
 
+class CalledForJsonOutputError(AnalysisError):
+    pass
 
 class InvalidArgumentError(AnalysisError):
     pass

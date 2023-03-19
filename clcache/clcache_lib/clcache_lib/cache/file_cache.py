@@ -462,8 +462,7 @@ class CacheFileStrategy:
         self.persistent_stats.save_combined(self.current_stats)
 
         # also save the current stats to the build directory
-        build_stats = PersistentStats(
-            Path(BUILDDIR_STR) / f"clcache.json")
+        build_stats = PersistentStats(Path(BUILDDIR_STR) / "clcache.json")
         build_stats.save_combined(self.current_stats)
 
     @property
