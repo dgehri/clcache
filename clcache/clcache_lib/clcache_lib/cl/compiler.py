@@ -6,12 +6,12 @@ import sys
 from pathlib import Path
 from shutil import which
 from tempfile import TemporaryFile
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from ..config import CL_DEFAULT_CODEC
 from ..utils import trace
-from ..utils.args import (Argument, ArgumentNoParam, ArgumentT1, ArgumentT2, ArgumentT3,
-                          ArgumentT4, CommandLineAnalyzer, split_comands_file)
+from ..utils.args import (ArgumentT1, ArgumentT2, ArgumentT3, ArgumentT4,
+                          CommandLineAnalyzer, split_comands_file)
 from ..utils.errors import *
 
 
@@ -98,11 +98,8 @@ class ClCommandLineAnalyzer(CommandLineAnalyzer):
             ("AI", True),
             ("I", True),
             ("FU", True),
-            ("Fo", True),
             ("imsvc", True),
             ("external:I", True),
-            ("external:env", False),
-            ("Xclang", False),
             ("D", False),
             ("MD", False),
             ("MT", False),
@@ -121,7 +118,6 @@ class ClCommandLineAnalyzer(CommandLineAnalyzer):
             ("we", False),
             ("wo", False),
             ("wd", False),
-            ("W", False),
             ("Z7", False),
             ("nologo", False),
             ("showIncludes", False)
@@ -200,7 +196,10 @@ class ClCommandLineAnalyzer(CommandLineAnalyzer):
         return input_files, obj_files
 
 
-def invoke_real_compiler(compiler_path: Path, cmd_line: List[str], capture_output: bool = False, environment: Optional[Dict[str, str]] = None) -> Tuple[int, str, str]:
+def invoke_real_compiler(compiler_path: Path, 
+                         cmd_line: List[str], 
+                         capture_output: bool = False, 
+                         environment: Optional[Dict[str, str]] = None) -> Tuple[int, str, str]:
     '''Invoke the real compiler and return its exit code, stdout and stderr.'''
 
     read_cmd_line = [str(compiler_path)] + cmd_line
