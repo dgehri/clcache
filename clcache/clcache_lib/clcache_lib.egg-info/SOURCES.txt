@@ -14,6 +14,7 @@ clcache_lib/cache/couchbase_ex.py
 clcache_lib/cache/ex.py
 clcache_lib/cache/file_cache.py
 clcache_lib/cache/hash.py
+clcache_lib/cache/manifest_entry.py
 clcache_lib/cache/persistent_json_dict.py
 clcache_lib/cache/remote_cache.py
 clcache_lib/cache/server.py
@@ -23,5 +24,9 @@ clcache_lib/cl/__init__.py
 clcache_lib/cl/compiler.py
 clcache_lib/config/__init__.py
 clcache_lib/config/config.py
+clcache_lib/moc/__init__.py
+clcache_lib/moc/compiler.py
 clcache_lib/utils/__init__.py
+clcache_lib/utils/args.py
+clcache_lib/utils/errors.py
 clcache_lib/utils/util.py

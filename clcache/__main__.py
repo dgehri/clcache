@@ -11,50 +11,40 @@ import os
 from shutil import which
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional, Tuple
 
 from clcache_lib.config import VERSION
 
 
-def _parse_args() -> argparse.Namespace:
+def _parse_args() -> Tuple[argparse.Namespace, List[str]]:
     '''Parse the command line arguments'''
-    class CommandCheckAction(argparse.Action):
-        def __call__(self, parser, namespace, values, optional_string=None):
-            if values and not values.lower().endswith(".exe"):
-                setattr(namespace, "non_command", values)
-                return
-            setattr(namespace, self.dest, values)
 
-    class RemainderSetAction(argparse.Action):
-        def __call__(self, parser, namespace, values, optional_string=None):
-            if nonCommand := getattr(namespace, "non_command", None):
-                values.insert(0, nonCommand)
-            setattr(namespace, self.dest, values)
+    parser = argparse.ArgumentParser(
+        description=f"clcache.py v{VERSION}", fromfile_prefix_chars="@")
 
-    parser = argparse.ArgumentParser(description=f"clcache.py v{VERSION}")
     # Handle the clcache standalone actions, only one can be used at a time
-    group_parser = parser.add_mutually_exclusive_group()
-    group_parser.add_argument(
+    cmd_group = parser.add_mutually_exclusive_group()
+    cmd_group.add_argument(
         "-s",
         "--stats",
         dest="show_stats",
         action="store_true",
         help="Print cache statistics",
     )
-    group_parser.add_argument(
+    cmd_group.add_argument(
         "-c", "--clean", dest="clean_cache", action="store_true", help="Clean cache"
     )
-    group_parser.add_argument(
+    cmd_group.add_argument(
         "-C", "--clear", dest="clear_cache", action="store_true", help="Clear cache"
     )
-    group_parser.add_argument(
+    cmd_group.add_argument(
         "-z",
         "--reset",
         dest="reset_stats",
         action="store_true",
         help="Reset cache statistics",
     )
-    group_parser.add_argument(
+    cmd_group.add_argument(
         "-M",
         "--set-size",
         dest="cache_size",
@@ -62,14 +52,14 @@ def _parse_args() -> argparse.Namespace:
         default=None,
         help="Set maximum cache size (in bytes)",
     )
-    group_parser.add_argument(
+    cmd_group.add_argument(
         "--set-size-gb",
         dest="cache_size_gb",
         type=int,
         default=None,
         help="Set maximum cache size (in GB)",
     )
-    group_parser.add_argument(
+    cmd_group.add_argument(
         "--run-server",
         dest="run_server",
         type=int,
@@ -77,24 +67,27 @@ def _parse_args() -> argparse.Namespace:
         help="Run clcache server (optional timeout in seconds)",
     )
 
-    # This argument need to be optional, or it will be required for the status commands above
     parser.add_argument(
-        "compiler",
+        "--compiler-executable",
+        dest="compiler",
+        type=str,
         default=None,
-        action=CommandCheckAction,
         nargs="?",
-        help="Optional path to compile executable. If not "
-        "present look in CLCACHE_CL environment variable "
-        "or search PATH for exe.",
-    )
-    parser.add_argument(
-        "compiler_args",
-        action=RemainderSetAction,
-        nargs=argparse.REMAINDER,
-        help="Arguments to the compiler",
+        help="Optional path to compiler executable.",
     )
 
-    return parser.parse_args()
+    options, remainder = parser.parse_known_args()
+
+    if (
+        options.compiler is None
+        and len(remainder) > 0
+        and not remainder[0].startswith(("-", "/"))
+        and remainder[0].endswith(".exe")
+    ):
+        options.compiler = remainder[0]
+        remainder = remainder[1:]
+
+    return options, remainder
 
 
 def _find_compiler_binary() -> Optional[Path]:
@@ -113,7 +106,7 @@ def _find_compiler_binary() -> Optional[Path]:
 
 def main() -> int:  # sourcery skip: de-morgan, extract-duplicate-method
 
-    options = _parse_args()
+    options, compiler_args = _parse_args()
 
     if options.run_server is not None:
         # Run clcache server
@@ -195,10 +188,10 @@ def main() -> int:  # sourcery skip: de-morgan, extract-duplicate-method
         trace("Found real compiler binary at '{0!s}'".format(compiler_path))
 
         if "CLCACHE_DISABLE" in os.environ:
-            return compiler.invoke_real_compiler(compiler_path, options.compiler_args)[0]
+            return compiler.invoke_real_compiler(compiler_path, compiler_args)[0]
 
         try:
-            return compiler.process_compile_request(cache, compiler_path, options.compiler_args)
+            return compiler.process_compile_request(cache, compiler_path, compiler_args)
         except LogicException as e:
             print(e)
             return 1

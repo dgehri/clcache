@@ -9,7 +9,9 @@ popd
 python -m nuitka --standalone --plugin-enable=multiprocessing --plugin-enable=pylint-warnings --python-flag="-O" --mingw64 .\clcache
 pushd conan
 set CONAN_REVISIONS_ENABLED=1
+
 conan export-pkg conanfile.py --force
+
 rem conan upload clcache/* --all -r globus-conan-local
 popd
 pause
