@@ -383,7 +383,7 @@ def _process(cache: Cache,
 
                             # Check if object file exists in cache
                             with cache.lock_for(cachekey):
-                                hit, _ = cache.has_entry(cachekey)
+                                hit = cache.has_entry(cachekey)
                                 if hit:
                                     # Object cache hit!
                                     result = _process_cache_hit(

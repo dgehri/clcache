@@ -12,7 +12,14 @@ set CONAN_REVISIONS_ENABLED=1
 
 conan export-pkg conanfile.py --force
 
-rem conan upload clcache/* --all -r globus-conan-local
+set USER=dgehri
+set CHANNEL=dev
+set VERSION=4.4.3c
+
+conan upload clcache/%VERSION%@%USER%/%CHANNEL% --all -r globus-conan-local
+
 popd
 pause
 
+rem Powershell version of the above
+rem Path: compile_nuitka.ps1

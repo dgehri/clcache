@@ -71,7 +71,7 @@ def invoke_real_compiler(compiler_path: Path,
             )
             return_code = compilerProcess.wait()
             stdout_file.seek(0)
-            stdout = stdout_file.read().decode(CL_DEFAULT_CODEC)
+            stdout = stdout_file.read().decode(CL_DEFAULT_CODEC) # type: ignore
             stderr_file.seek(0)
             stderr = stderr_file.read().decode(CL_DEFAULT_CODEC)
     else:

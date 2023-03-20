@@ -16,11 +16,13 @@ from typing import List, Optional, Tuple
 from clcache_lib.config import VERSION
 
 
-def _parse_args() -> Tuple[argparse.Namespace, List[str]]:
-    '''Parse the command line arguments'''
+def _parse_args() -> Tuple[Optional[argparse.Namespace], Optional[argparse.Namespace], List[str]]:
+    '''
+    Parse the command line arguments
+    '''
 
     parser = argparse.ArgumentParser(
-        description=f"clcache.py v{VERSION}", fromfile_prefix_chars="@")
+        description=f"clcache.py v{VERSION}")
 
     # Handle the clcache standalone actions, only one can be used at a time
     cmd_group = parser.add_mutually_exclusive_group()
@@ -67,6 +69,42 @@ def _parse_args() -> Tuple[argparse.Namespace, List[str]]:
         help="Run clcache server (optional timeout in seconds)",
     )
 
+    cmd_group2 = cmd_group.add_mutually_exclusive_group()
+    cmd_group2.add_argument(
+        "--compiler-executable",
+        dest="compiler",
+        type=str,
+        default=None,
+        nargs="?",
+        help="Optional path to compiler executable.",
+    )
+    # Add positional arguments for the compiler executable
+    cmd_group2.add_argument(
+        "compiler",
+        type=str,
+        default=None,
+        nargs="?",
+        help="Optional path to compiler executable."
+    )
+
+    # Add remaining arguments
+    parser.add_argument(
+        "args",
+        type=str,
+        default=None,
+        nargs=argparse.REMAINDER,
+        help="Optional arguments for the compiler executable."
+    )
+
+    options, remainder = parser.parse_known_args(sys.argv[1:3])
+    remainder.extend(options.args)
+    
+    if not remainder and not options.compiler:
+        return options, None, []
+
+    # if there are any arguments left, we are not running a standalone command
+    parser = argparse.ArgumentParser()
+
     parser.add_argument(
         "--compiler-executable",
         dest="compiler",
@@ -76,6 +114,7 @@ def _parse_args() -> Tuple[argparse.Namespace, List[str]]:
         help="Optional path to compiler executable.",
     )
 
+    # only consider first two arguments, the rest is passed to the compiler
     options, remainder = parser.parse_known_args()
 
     if (
@@ -87,7 +126,7 @@ def _parse_args() -> Tuple[argparse.Namespace, List[str]]:
         options.compiler = remainder[0]
         remainder = remainder[1:]
 
-    return options, remainder
+    return None, options, remainder
 
 
 def _find_compiler_binary() -> Optional[Path]:
@@ -106,9 +145,9 @@ def _find_compiler_binary() -> Optional[Path]:
 
 def main() -> int:  # sourcery skip: de-morgan, extract-duplicate-method
 
-    options, compiler_args = _parse_args()
+    clcache_options, compiler_options, compiler_args = _parse_args()
 
-    if options.run_server is not None:
+    if clcache_options is not None and clcache_options.run_server is not None:
         # Run clcache server
         from clcache_lib.cache.server import PipeServer
 
@@ -116,7 +155,7 @@ def main() -> int:  # sourcery skip: de-morgan, extract-duplicate-method
             return 0
 
         # we are the first instance
-        server = PipeServer(timeout_s=options.run_server)
+        server = PipeServer(timeout_s=clcache_options.run_server)
         return server.run()
 
     from clcache_lib.cache.cache import (Cache, clean_cache, clear_cache,
@@ -124,50 +163,51 @@ def main() -> int:  # sourcery skip: de-morgan, extract-duplicate-method
 
     with Cache() as cache:
 
-        if options.show_stats:
-            print_statistics(cache)
-            return 0
+        if clcache_options is not None:
+            if clcache_options.show_stats:
+                print_statistics(cache)
+                return 0
 
-        if options.clean_cache:
-            clean_cache(cache)
-            print("Cache cleaned")
-            return 0
+            if clcache_options.clean_cache:
+                clean_cache(cache)
+                print("Cache cleaned")
+                return 0
 
-        if options.clear_cache:
-            clear_cache(cache)
-            print("Cache cleared")
-            print_statistics(cache)
-            return 0
+            if clcache_options.clear_cache:
+                clear_cache(cache)
+                print("Cache cleared")
+                print_statistics(cache)
+                return 0
 
-        if options.reset_stats:
-            reset_stats(cache)
-            print("Statistics reset")
-            print_statistics(cache)
-            return 0
+            if clcache_options.reset_stats:
+                reset_stats(cache)
+                print("Statistics reset")
+                print_statistics(cache)
+                return 0
 
-        if options.cache_size_gb is not None:
-            max_size_value = options.cache_size_gb * 1024 * 1024 * 1024
-            if max_size_value < 1:
-                print("Max size argument must be greater than 0.", file=sys.stderr)
-                return 1
+            if clcache_options.cache_size_gb is not None:
+                max_size_value = clcache_options.cache_size_gb * 1024 * 1024 * 1024
+                if max_size_value < 1:
+                    print("Max size argument must be greater than 0.", file=sys.stderr)
+                    return 1
 
-            cache.configuration.set_max_cache_size(max_size_value)
-            print_statistics(cache)
-            return 0
+                cache.configuration.set_max_cache_size(max_size_value)
+                print_statistics(cache)
+                return 0
 
-        if options.cache_size is not None:
-            max_size_value = options.cache_size
-            if max_size_value < 1:
-                print("Max size argument must be greater than 0.", file=sys.stderr)
-                return 1
+            if clcache_options.cache_size is not None:
+                max_size_value = clcache_options.cache_size
+                if max_size_value < 1:
+                    print("Max size argument must be greater than 0.", file=sys.stderr)
+                    return 1
 
-            cache.configuration.set_max_cache_size(max_size_value)
-            print_statistics(cache)
-            return 0
+                cache.configuration.set_max_cache_size(max_size_value)
+                print_statistics(cache)
+                return 0
 
         compiler_path = None
-        if options.compiler:
-            compiler_path = Path(options.compiler)
+        if compiler_options is not None and compiler_options.compiler:
+            compiler_path = Path(compiler_options.compiler)
         else:
             compiler_path = _find_compiler_binary()
 
