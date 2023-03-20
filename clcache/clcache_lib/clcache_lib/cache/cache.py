@@ -71,7 +71,7 @@ class Cache:
     def set_entry(self, key: str, value):
         return self.strategy.set_entry(key, value)
 
-    def has_entry(self, cachekey) -> Tuple[bool, bool]:
+    def has_entry(self, cachekey) -> bool:
         '''
         Returns true if the cache contains an entry for the given key.
 
@@ -106,9 +106,8 @@ def add_object_to_cache(cache: Cache,
     size = 0
 
     with cache.lock_for(cache_key):
-        hit, _ = cache.has_entry(cache_key)
         # If the cache entry is not present, add it.
-        if not hit:
+        if not cache.has_entry(cache_key):
             cache.statistics.register_cache_entry(reason)
 
             size = cache.set_entry(cache_key, artifacts)

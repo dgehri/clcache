@@ -230,7 +230,7 @@ class CompilerArtifactsSection:
 
         return paths
 
-    def has_entry(self, key: str) -> Tuple[bool, bool]:
+    def has_entry(self, key: str) -> bool:
         '''
         Test if the cache entry for the given key exists.
 
@@ -238,7 +238,7 @@ class CompilerArtifactsSection:
             A tuple of (has entry, is local cache entry).
         '''
         entry_dir: Path = self.cache_entry_dir(key)
-        return entry_dir.exists() and any(entry_dir.iterdir()), True
+        return entry_dir.exists() and any(entry_dir.iterdir())
 
     def set_entry(self, key: str, artifacts: CompilerArtifacts) -> int:
         # sourcery skip: extract-method
@@ -328,7 +328,7 @@ class CompilerArtifactsSection:
         return size
 
     def get_entry(self, key: str) -> CompilerArtifacts:
-        hit, _ = self.has_entry(key)
+        hit = self.has_entry(key)
         assert hit
         cache_entry_dir = self.cache_entry_dir(key)
 
@@ -502,7 +502,7 @@ class CacheFileStrategy:
         '''Get the directory for the given key or raise a KeyError if the entry does not exist.'''
         return self.compiler_artifacts_repository.section(key).cache_entry_dir(key)
 
-    def has_entry(self, cachekey: str) -> Tuple[bool, bool]:
+    def has_entry(self, cachekey: str) -> bool:
         '''
         Determines whether the cache contains an entry for the given key.
 

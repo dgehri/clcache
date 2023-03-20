@@ -8,6 +8,7 @@
 #
 import argparse
 import os
+from shutil import which
 import sys
 from pathlib import Path
 from typing import Optional
@@ -15,7 +16,7 @@ from typing import Optional
 from clcache_lib.config import VERSION
 
 
-def parse_args() -> argparse.Namespace:
+def _parse_args() -> argparse.Namespace:
     '''Parse the command line arguments'''
     class CommandCheckAction(argparse.Action):
         def __call__(self, parser, namespace, values, optional_string=None):
@@ -96,9 +97,23 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def _find_compiler_binary() -> Optional[Path]:
+    if "CLCACHE_CL" in os.environ:
+        path: Path = Path(os.environ["CLCACHE_CL"])
+
+        # If the path is not absolute, try to find it in the PATH
+        if path.name == path:
+            if p := which(path):
+                path = Path(p)
+
+        return path if path is not None and path.exists() else None
+
+    return Path(p) if (p := which("cl.exe")) else None
+
+
 def main() -> int:  # sourcery skip: de-morgan, extract-duplicate-method
-    
-    options = parse_args()
+
+    options = _parse_args()
 
     if options.run_server is not None:
         # Run clcache server
@@ -113,11 +128,6 @@ def main() -> int:  # sourcery skip: de-morgan, extract-duplicate-method
 
     from clcache_lib.cache.cache import (Cache, clean_cache, clear_cache,
                                          print_statistics, reset_stats)
-    from clcache_lib.cache.ex import LogicException
-    from clcache_lib.cache.virt import set_llvm_dir
-    from clcache_lib.cl.compiler import invoke_real_compiler, find_compiler_binary
-    from clcache_lib.cl.clcache import process_compile_request
-    from clcache_lib.utils.util import trace
 
     with Cache() as cache:
 
@@ -162,25 +172,33 @@ def main() -> int:  # sourcery skip: de-morgan, extract-duplicate-method
             print_statistics(cache)
             return 0
 
-        compiler: Optional[Path] = options.compiler or find_compiler_binary()
-        if not (compiler and os.access(compiler, os.F_OK)):
+        compiler_path = None
+        if options.compiler:
+            compiler_path = Path(options.compiler)
+        else:
+            compiler_path = _find_compiler_binary()
+
+        if not (compiler_path and compiler_path.exists()):
             print(
                 "Failed to locate specified compiler, or exe on PATH (and CLCACHE_CL is not set), aborting."
             )
             return 1
 
-        # Extract the compiler folder from the compiler path
-        set_llvm_dir(compiler)
+        if compiler_path.name.lower() == "moc.exe":
+            import clcache_lib.moc.compiler as compiler
+        else:
+            import clcache_lib.cl.compiler as compiler
 
-        trace("Found real compiler binary at '{0!s}'".format(compiler))
-        trace(f"Arguments we care about: '{sys.argv}'")
+        from clcache_lib.cache.ex import LogicException
+        from clcache_lib.utils.util import trace
 
-        # Determine CL_
+        trace("Found real compiler binary at '{0!s}'".format(compiler_path))
 
         if "CLCACHE_DISABLE" in os.environ:
-            return invoke_real_compiler(compiler, options.compiler_args)[0]
+            return compiler.invoke_real_compiler(compiler_path, options.compiler_args)[0]
+
         try:
-            return process_compile_request(cache, compiler, options.compiler_args)
+            return compiler.process_compile_request(cache, compiler_path, options.compiler_args)
         except LogicException as e:
             print(e)
             return 1

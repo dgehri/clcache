@@ -12,12 +12,8 @@ from typing import Callable
 
 import pyuv
 
-from ..config.config import VERSION
-
 # Not the same as VERSION !
-# If you change the server version, you may want 
-# to change this to simply 2, 3, ... to avoid confusion
-SERVER_VERSION = "4.4.2-dgehri"
+SERVER_VERSION = "1"
 
 PIPE_NAME = fr'\\.\pipe\LOCAL\clcache-626763c0-bebe-11ed-a901-0800200c9a66-{SERVER_VERSION}'
 SINGLETON_NAME = fr"Local\singleton-626763c0-bebe-11ed-a901-0800200c9a66-{SERVER_VERSION}"

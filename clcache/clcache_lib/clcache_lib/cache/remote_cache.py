@@ -156,7 +156,7 @@ class CacheCouchbaseStrategy:
         self.cache[key] = payload
         return True
 
-    def has_entry(self, key: str):
+    def has_entry(self, key: str) -> bool:
         '''
         Returns true if the cache contains an entry for the given key.
 
@@ -164,7 +164,7 @@ class CacheCouchbaseStrategy:
             A tuple of (has entry, is local cache entry).
         '''
         in_cache = key in self.cache and self.cache[key] is not None
-        return in_cache or self._fetchEntry(key) is not None, False
+        return in_cache or self._fetchEntry(key) is not None
 
     def getEntryAsPayload(self, key: str) -> Optional[dict]:
         '''
@@ -289,15 +289,15 @@ class CacheFileWithCouchbaseFallbackStrategy:
     def __str__(self):
         return f"CacheFileWithCouchbaseFallbackStrategy {self.local_cache} and {self.remote_cache}"
 
-    def has_entry(self, key: str) -> Tuple[bool, bool]:
+    def has_entry(self, key: str) -> bool:
         '''
         Returns true if the cache contains an entry for the given key.
 
         Returns:
             A tuple of (has entry, is local cache entry).
         '''
-        local_hit, _ = self.local_cache.has_entry(key)
-        return (True, True) if local_hit else self.remote_cache.has_entry(key)
+        hit = self.local_cache.has_entry(key)
+        return True if hit else self.remote_cache.has_entry(key)
 
     def get_entry(self, key: str) -> Optional[CompilerArtifacts]:
         '''
@@ -305,8 +305,7 @@ class CacheFileWithCouchbaseFallbackStrategy:
 
         If the entry is in the remote cache, it will be copied into the local cache.
         '''
-        local_hit, _ = self.local_cache.has_entry(key)
-        if local_hit:
+        if self.local_cache.has_entry(key):
             trace(f"Getting object {key} from local cache")
             return self.local_cache.get_entry(key)
 
@@ -316,7 +315,8 @@ class CacheFileWithCouchbaseFallbackStrategy:
 
             # record the hit, and size of the object in the stats
             self.local_cache.current_stats.register_cache_entry_size(size)
-            self.local_cache.current_stats.register_cache_entry(MissReason.REMOTE_CACHE_HIT)
+            self.local_cache.current_stats.register_cache_entry(
+                MissReason.REMOTE_CACHE_HIT)
 
             return self.local_cache.get_entry(key)
 

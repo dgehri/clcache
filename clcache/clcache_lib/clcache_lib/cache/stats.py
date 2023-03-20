@@ -16,7 +16,6 @@ class MissReason(Enum):
     CALL_FOR_LINKING = "CallsForLinking"
     CALL_FOR_EXTERNAL_DEBUG_INFO = "CallsForExternalDebugInfo"
     CALL_FOR_PREPROCESSING = "CallsForPreprocessing"
-    CALL_FOR_JSON = "CallsForJson"
     CACHE_FAILURE = "CacheFailures"
     REMOTE_CACHE_HIT = "RemoteCacheHits"
 

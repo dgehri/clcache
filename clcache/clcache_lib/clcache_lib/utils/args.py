@@ -219,7 +219,8 @@ class CommandLineAnalyzer:
         for arg in self._args:
             offset = 1
 
-            if isinstance(arg, (ArgumentQtLongWithParam, ArgumentQtLong)) and cmd_line_arg.startswith("--"):
+            if isinstance(arg, (ArgumentQtLongWithParam, ArgumentQtLong)) \
+                    and cmd_line_arg.startswith("--"):
                 offset = 2
 
             if cmd_line_arg.startswith(arg.name, offset):
@@ -229,73 +230,93 @@ class CommandLineAnalyzer:
         # Convert list of tuples to dictionary
         return dict(self._args_to_unify_and_sort)
 
-    def parse_args_and_input_files(self, cmdline: List[str]) -> Tuple[Dict[str, List[str]], List[Path]]:
+    def _parse_arg(self,
+                   arg: Argument,
+                   cmdline: List[str], i: int) \
+            -> Tuple[int, Optional[str]]:
+        # sourcery skip: assign-if-exp
         '''
-        Parse command line arguments and input files.
+        Parse argument.
 
         Parameters:
+            arg: The argument to parse.
             cmdline: The command line to parse.
+            i: The index of the argument to parse.
 
         Returns:
             A tuple of two elements:
-            - The first element is a dictionary mapping argument names to a list of argument values.
-            - The second element is a list of input files.
+            - The first element is the index of the next argument to parse.
+            - The second element is the value of the argument.
         '''
-        arguments=defaultdict(list)
-        input_files: List[Path]=[]
-        i=0
+        if isinstance(arg, ArgumentNoParam):
+            # /NAME (no space)
+            return i + 1, None
+
+        if isinstance(arg, ArgumentT1):
+            # /NAMEparameter (no space, required parameter).
+            if value := cmdline[i][len(str(arg)):]:
+                return i + 1, value
+            raise InvalidArgumentError(f"Missing parameter for {arg}")
+
+        if isinstance(arg, ArgumentT2):
+            # /NAME[parameter] (no space, optional parameter)
+            return i + 1, cmdline[i][len(str(arg)):]
+
+        if isinstance(arg, ArgumentT3):
+            # /NAME[ ]parameter (optional space)
+            value = cmdline[i][len(str(arg)):]
+            if not value:
+                return i + 2, cmdline[i + 1]
+            if value[0].isspace():
+                return i + 1, value[1:]
+            else:
+                return i + 1, value
+
+        if isinstance(arg, ArgumentT4):
+            # /NAME parameter (required space)
+            return i + 2, cmdline[i + 1]
+
+        if isinstance(arg, (ArgumentQtShort, ArgumentQtLong)):
+            # -<LETTER> (short option)
+            # --<NAME> (long option)
+            return i + 1, None
+
+        if isinstance(arg, (ArgumentQtShortWithParam, ArgumentQtLongWithParam)):
+            # -<LETTER>[= ]<ARG> (short option)
+            # --<NAME>[= ]<ARG> (long option)
+            value = cmdline[i][len(str(arg)):]
+            if not value:
+                return i + 2, cmdline[i + 1]
+            elif value[0] == "=":
+                value = value[1:]
+            return i + 1, value
+
+        raise AssertionError("Unsupported argument type.")
+
+    def parse_args_and_input_files(self, cmdline: List[str]) \
+            -> Tuple[Dict[str, List[str]], List[Path]]:
+
+        # Iterate over command line arguments and use _parse_arg to parse them.
+        arguments = defaultdict(list)
+        input_files: List[Path] = []
+        i = 0
         while i < len(cmdline):
-            arg_str: str=cmdline[i]
+            arg_str: str = cmdline[i]
 
-            # Plain arguments starting with / or -
-            if arg_str.startswith("/") or arg_str.startswith("-"):
-                arg=self._get_parametrized_arg_type(
-                    arg_str)
-                if arg is not None:
-                    if isinstance(arg, (ArgumentQtShort, ArgumentQtLong)):
-                        value=None
-                    elif isinstance(arg, (ArgumentQtShortWithParam, ArgumentQtLongWithParam)):
-                        value=arg_str[len(str(arg)):]
-                        if not value:
-                            value=cmdline[i + 1]
-                            i += 1
-                        elif value[0].isspace() or value[0] == "=":
-                            value=value[1:]
-                    elif isinstance(arg, ArgumentT1):
-                        value=arg_str[len(str(arg)):]
-                        if not value:
-                            raise InvalidArgumentError(
-                                f"Parameter for {arg} must not be empty"
-                            )
-                    elif isinstance(arg, ArgumentT2):
-                        value = arg_str[len(str(arg)):]
-                    elif isinstance(arg, ArgumentT3):
-                        value = arg_str[len(str(arg)):]
-                        if not value:
-                            value = cmdline[i + 1]
-                            i += 1
-                        elif value[0].isspace():
-                            value = value[1:]
-                    elif isinstance(arg, ArgumentT4):
-                        value = cmdline[i + 1]
-                        i += 1
-                    else:
-                        raise AssertionError("Unsupported argument type.")
-
+            # Parse argument if starting with slash or dash
+            if arg_str.startswith(('/', '-')):
+                if arg := self._get_parametrized_arg_type(arg_str):
+                    i, value = self._parse_arg(arg, cmdline, i)
                     arguments[arg.name].append(value)
                 else:
                     # name not followed by parameter in this case
-                    arg_name = arg_str[1:]
-                    arguments[arg_name].append("")
-
-            elif arg_str[0] == "@":
+                    arguments[arg_str[1:]].append(None)
+                    i += 1
+            elif arg_str.startswith('@'):
                 raise AssertionError(
-                    "No response file arguments (starting with @) must be left here."
-                )
-
+                    "Response file must be expanded before parsing.")
             else:
                 input_files.append(Path(arg_str))
+                i += 1
 
-            i += 1
-
-        return dict(arguments), input_files
+        return arguments, input_files

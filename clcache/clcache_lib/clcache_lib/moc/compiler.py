@@ -135,25 +135,12 @@ class MocCommandLineAnalyzer(CommandLineAnalyzer):
         output_file = None
         if "o" in options and options["o"][0]:
             output_file = Path(options["o"][0])
+        else:
+            raise CalledWithoutOutputFile()
 
         trace(f"MOC input file: {input_file}")
         trace(f"MOC output file: {output_file}")
         return input_file, output_file, options
-
-
-def find_compiler_binary() -> Optional[Path]:
-    """Find the moc compiler binary."""
-    if "MOCCACHE_MOC" in os.environ:
-        path: Path = Path(os.environ["MOCCACHE_MOC"])
-
-        # If the path is not absolute, try to find it in the PATH
-        if path.name == path:
-            if p := which(path):
-                path = Path(p)
-
-        return path if path is not None and path.exists() else None
-
-    return Path(p) if (p := which("moc.exe")) else None
 
 
 def invoke_real_compiler(compiler_path: Path,
@@ -266,8 +253,13 @@ def process_compile_request(cache: Cache, compiler: Path, args: List[str]) -> in
     except CalledForJsonOutputError:
         trace(
             f"Cannot cache invocation as {cmdline}: called for JSON output")
-        cache.statistics.record_cache_miss(MissReason.CALL_FOR_PREPROCESSING)
+        cache.statistics.record_cache_miss(MissReason.CACHE_FAILURE)
 
+    except CalledWithoutOutputFile:
+        trace(
+            f"Cannot cache invocation as {cmdline}: called without output file")
+        cache.statistics.record_cache_miss(MissReason.CACHE_FAILURE)
+        
     exit_code, out, err = invoke_real_compiler(compiler, args)
     print_stdout_and_stderr(out, err, CL_DEFAULT_CODEC)
     return exit_code
@@ -406,7 +398,8 @@ def _process(cache: Cache,
                                         # Determine target name
                                         rule_name = output_file
                                         if "dep-file-rule-name" in options:
-                                            rule_name = Path(options["dep-file-rule-name"][0])
+                                            rule_name = Path(
+                                                options["dep-file-rule-name"][0])
 
                                         # create depencency file
                                         _create_dep_file(
