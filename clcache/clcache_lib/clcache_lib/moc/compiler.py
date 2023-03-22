@@ -632,16 +632,10 @@ def _parse_dep_file(dep_file_path: Path) -> List[Path]:
         if m := re.match(r"^(\s*(?:[a-zA-Z]:)?[^:]*:)", buf):
             buf = buf[m.end() + 1:]
 
-            # remove the backslash line continuation characters
-            buf = buf.replace("\\\n", "")
-
-            # remove the trailing newline
-            buf = buf[:-1]
-
-            # split the remaining lines into a list
-            lines = buf.split()
+            # Split buf into lines, ignoring trailing backslashes
+            lines = re.split(r"\\\r?\n", buf)               
 
             # convert the list of strings into a list of Path objects
-            return [Path(os.path.normpath(line)).absolute() for line in lines]
+            return [Path(os.path.normpath(line.strip())).absolute() for line in lines]
 
     return []

@@ -27,6 +27,9 @@ clcache_lib/config/config.py
 clcache_lib/moc/__init__.py
 clcache_lib/moc/compiler.py
 clcache_lib/utils/__init__.py
+clcache_lib/utils/app_singleton.py
 clcache_lib/utils/args.py
 clcache_lib/utils/errors.py
+clcache_lib/utils/named_mutex.py
+clcache_lib/utils/ready_event.py
 clcache_lib/utils/util.py
