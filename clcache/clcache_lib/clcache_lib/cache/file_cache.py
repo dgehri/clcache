@@ -54,6 +54,8 @@ class Manifest:
 
     def add_entry(self, entry: ManifestEntry):
         """Adds entry at the top of the entries"""
+        # Remove existing entry with the same includeHash
+        self._entries = [e for e in self._entries if e.includesContentHash != entry.includesContentHash]
         self._entries.insert(0, entry)
 
     def touch_entry(self, obj_hash: str):
@@ -80,7 +82,7 @@ class ManifestSection:
         '''Writes manifest to disk and returns the size of the manifest file'''
         manifest_path = self.manifest_path(manifest_hash)
         trace(
-            f"Writing manifest with manifestHash = {manifest_hash} to {manifest_path}")
+            f"Writing manifest with manifest_hash = {manifest_hash} to {manifest_path}")
         ensure_dir_exists(self.manifestSectionDir)
 
         # Retry writing manifest file in case of concurrent
@@ -96,6 +98,8 @@ class ManifestSection:
                 # Return the size of the manifest file (warning: don't move inside the with block!)
                 return manifest_path.stat().st_size
             except Exception as e:
+                trace(
+                    f"Failed to write manifest file {manifest_path}: {e} (retrying)")
                 if i == 9:
                     raise
                 time.sleep(0.5)
@@ -112,6 +116,7 @@ class ManifestSection:
 
             with open(manifest_file, "r") as in_file:
                 doc = json.load(in_file)
+                visited = set()
                 return Manifest(
                     [
                         ManifestEntry(
@@ -120,6 +125,8 @@ class ManifestSection:
                             e["objectHash"]
                         )
                         for e in doc["entries"]
+                        if e["includesContentHash"] not in visited
+                        and not visited.add(e["includesContentHash"])
                     ]
                 ), manifest_file.stat().st_size
         except IOError:

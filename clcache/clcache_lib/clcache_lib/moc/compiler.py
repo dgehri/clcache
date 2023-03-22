@@ -6,7 +6,6 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from shutil import which
 from tempfile import TemporaryFile
 from typing import Callable, Dict, List, Optional, Tuple
 
@@ -310,6 +309,7 @@ def _process_single_source(cache: Cache,
         return _process(cache, output_file, compiler, cmdline, header_file, analyzer, options)
 
     except CompilerFailedException as e:
+        trace(f"Compiler failed: {e}")
         return e.get_compiler_result()
     except Exception as e:
         trace(f"Exception occurred: {e}")
@@ -614,8 +614,6 @@ def _process_cache_hit(cache: Cache,
         assert cached_artifacts is not None
 
         copy_from_cache(cached_artifacts.obj_file_path, obj_file)
-
-        trace("Finished. Exit code 0")
         return (
             0,
             expand_compile_output(cached_artifacts.stdout, StdStream.STDOUT),

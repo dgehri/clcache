@@ -369,6 +369,7 @@ def _process_cache_hit(cache: Cache, obj_file: Path, cache_key: str) -> Tuple[in
                     success = True
                     break
                 except Exception:
+                    trace(f"Failed to delete object file {obj_file}, retrying...")
                     time.sleep(1)
 
             if not success:
@@ -378,7 +379,6 @@ def _process_cache_hit(cache: Cache, obj_file: Path, cache_key: str) -> Tuple[in
         assert cached_artifacts is not None
 
         copy_from_cache(cached_artifacts.obj_file_path, obj_file)
-        trace("Finished. Exit code 0")
         return (
             0,
             expand_compile_output(cached_artifacts.stdout, StdStream.STDOUT),
@@ -448,7 +448,7 @@ def _schedule_jobs(
         exit_code, out, err = _process_single_source(
             cache, compiler, job_cmdline, src_file, obj_file, environment, analyzer
         )
-        trace("Finished. Exit code {0:d}".format(exit_code))
+        trace(f"Finished. Exit code {exit_code}")
         print_stdout_and_stderr(out, err, CL_DEFAULT_CODEC)
     else:
         with concurrent.futures.ThreadPoolExecutor(
@@ -571,16 +571,17 @@ def _process(cache: Cache,
                             cachekey = entry.objectHash
                             manifest_hit = True
 
-                            # Move manifest entry to the top of the entries in the manifest
-                            # (if not already at top), so that we can use LRU replacement
-                            if entry_index > 0:
-                                manifest.touch_entry(cachekey)
-                                cache.set_manifest(manifest_hash, manifest)
-
                             # Check if object file exists in cache
                             with cache.lock_for(cachekey):
                                 hit = cache.has_entry(cachekey)
                                 if hit:
+                                    # Move manifest entry to the top of the entries in the manifest
+                                    # (if not already at top), so that we can use LRU replacement
+                                    if entry_index > 0:
+                                        trace("Moving manifest entry to top of manifest")
+                                        manifest.touch_entry(cachekey)
+                                        cache.set_manifest(manifest_hash, manifest)
+                                        
                                     # Object cache hit!
                                     return _process_cache_hit(cache, obj_file, cachekey)
 
@@ -593,6 +594,7 @@ def _process(cache: Cache,
 
         # If we get here, we have a cache miss and we'll need to invoke the real compiler
         if manifest_hit:
+            trace("Manifest hit, but no object file found in cache")
             # Got a manifest, but no object => invoke real compiler
             compiler_result = invoke_real_compiler(
                 compiler_path, cmdline, capture_output=True)
@@ -603,6 +605,7 @@ def _process(cache: Cache,
                     cache, cachekey, miss_reason, obj_file, compiler_result
                 )
         else:
+            trace("Manifest miss, invoking real compiler")
             # Also generate manifest
             strip_includes = False
             if "/showIncludes" not in cmdline:

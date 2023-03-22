@@ -8,15 +8,18 @@
 #
 import argparse
 import os
-from shutil import which
 import sys
 from pathlib import Path
+from shutil import which
+from types import ModuleType
 from typing import List, Optional, Tuple
 
+from clcache_lib.cache.ex import LogicException
 from clcache_lib.config import VERSION
+from clcache_lib.utils.util import trace
 
 
-def _parse_args() -> Tuple[Optional[argparse.Namespace], Optional[argparse.Namespace], List[str]]:
+def _parse_args() -> Optional[argparse.Namespace]:
     '''
     Parse the command line arguments
     '''
@@ -69,17 +72,8 @@ def _parse_args() -> Tuple[Optional[argparse.Namespace], Optional[argparse.Names
         help="Run clcache server (optional timeout in seconds)",
     )
 
-    cmd_group2 = cmd_group.add_mutually_exclusive_group()
-    cmd_group2.add_argument(
-        "--compiler-executable",
-        dest="compiler",
-        type=str,
-        default=None,
-        nargs="?",
-        help="Optional path to compiler executable.",
-    )
     # Add positional arguments for the compiler executable
-    cmd_group2.add_argument(
+    cmd_group.add_argument(
         "compiler",
         type=str,
         default=None,
@@ -98,35 +92,9 @@ def _parse_args() -> Tuple[Optional[argparse.Namespace], Optional[argparse.Names
 
     options, remainder = parser.parse_known_args(sys.argv[1:3])
     remainder.extend(options.args)
-    
-    if not remainder and not options.compiler:
-        return options, None, []
 
-    # if there are any arguments left, we are not running a standalone command
-    parser = argparse.ArgumentParser()
-
-    parser.add_argument(
-        "--compiler-executable",
-        dest="compiler",
-        type=str,
-        default=None,
-        nargs="?",
-        help="Optional path to compiler executable.",
-    )
-
-    # only consider first two arguments, the rest is passed to the compiler
-    options, remainder = parser.parse_known_args()
-
-    if (
-        options.compiler is None
-        and len(remainder) > 0
-        and not remainder[0].startswith(("-", "/"))
-        and remainder[0].endswith(".exe")
-    ):
-        options.compiler = remainder[0]
-        remainder = remainder[1:]
-
-    return None, options, remainder
+    # If there are no arguments, we are running a standalone command
+    return options if not remainder and not options.compiler else None
 
 
 def _find_compiler_binary() -> Optional[Path]:
@@ -143,10 +111,114 @@ def _find_compiler_binary() -> Optional[Path]:
     return Path(p) if (p := which("cl.exe")) else None
 
 
-def main() -> int:  # sourcery skip: de-morgan, extract-duplicate-method
+def _handle_clcache_options(clcache_options: argparse.Namespace, cache) -> Optional[int]:
+    # sourcery skip: extract-duplicate-method
+    from clcache_lib.cache.cache import (clean_cache, clear_cache,
+                                         print_statistics, reset_stats)
 
-    clcache_options, compiler_options, compiler_args = _parse_args()
+    if clcache_options.show_stats:
+        print_statistics(cache)
+        return 0
 
+    if clcache_options.clean_cache:
+        clean_cache(cache)
+        print("Cache cleaned")
+        return 0
+
+    if clcache_options.clear_cache:
+        clear_cache(cache)
+        print("Cache cleared")
+        print_statistics(cache)
+        return 0
+
+    if clcache_options.reset_stats:
+        reset_stats(cache)
+        print("Statistics reset")
+        print_statistics(cache)
+        return 0
+
+    if clcache_options.cache_size_gb is not None:
+        max_size_value = clcache_options.cache_size_gb * 1024 * 1024 * 1024
+        if max_size_value < 1:
+            print("Max size argument must be greater than 0.",
+                  file=sys.stderr)
+            return 1
+
+        cache.configuration.set_max_cache_size(max_size_value)
+        print_statistics(cache)
+        return 0
+
+    if clcache_options.cache_size is not None:
+        max_size_value = clcache_options.cache_size
+        if max_size_value < 1:
+            print("Max size argument must be greater than 0.",
+                  file=sys.stderr)
+            return 1
+
+        cache.configuration.set_max_cache_size(max_size_value)
+        print_statistics(cache)
+        return 0
+
+
+def _get_compiler_path() -> Tuple[Path, ModuleType, List[str]]:
+
+    # Clone arguments from sys.argv
+    args = sys.argv[1:].copy()
+
+    # Get the first argument of the command line and check if it is a compiler
+    compiler_path = None
+    if (
+        len(args) > 0
+        and not args[0].startswith(("-", "/"))
+        and args[0].endswith(".exe")
+    ):
+        compiler_path = Path(args.pop(0))
+
+    # Find out if we are running as clcache or moccache
+    identity = Path(sys.argv[0]).stem.lower()
+    if compiler_path and compiler_path.name.lower() == "moc.exe":
+        identity = "moccache"
+
+    if identity == "clcache":
+        compiler_pkg = __import__(
+            "clcache_lib.cl.compiler", fromlist=["compiler"])
+
+        if compiler_path is None:
+            compiler_path = _find_compiler_binary()
+
+    elif identity == "moccache":
+        compiler_pkg = __import__(
+            "clcache_lib.moc.compiler", fromlist=["compiler"])
+
+        if compiler_path is None:
+            # Locate "moccache.json" in current directory and parent directories, next to "CMakeCache.txt"
+            for path in [ Path.cwd() ] + list(Path.cwd().parents):
+                if (path / "CMakeCache.txt").exists():
+                    if (path / "moccache.json").exists():
+                        # read compiler path from moccache.json
+                        import json
+                        with open(path / "moccache.json", "r") as f:
+                            config = json.load(f)
+                            compiler_path = Path(config["moc_path"])
+                    break
+                path = path.parent
+
+    else:
+        raise LogicException(
+            "Unknown compiler identity: {0!s}".format(identity))
+
+    if not (compiler_path and compiler_path.exists()):
+        raise LogicException(
+            "Failed to locate specified compiler, or exe on PATH (and CLCACHE_CL is not set), aborting."
+        )
+
+    trace("Found real compiler binary at '{0!s}'".format(compiler_path))
+    return compiler_path, compiler_pkg, args
+
+
+def main() -> int:
+
+    clcache_options = _parse_args()
     if clcache_options is not None and clcache_options.run_server is not None:
         # Run clcache server
         from clcache_lib.cache.server import PipeServer
@@ -158,84 +230,33 @@ def main() -> int:  # sourcery skip: de-morgan, extract-duplicate-method
         server = PipeServer(timeout_s=clcache_options.run_server)
         return server.run()
 
-    from clcache_lib.cache.cache import (Cache, clean_cache, clear_cache,
-                                         print_statistics, reset_stats)
+    from clcache_lib.cache.cache import Cache
 
     with Cache() as cache:
 
         if clcache_options is not None:
-            if clcache_options.show_stats:
-                print_statistics(cache)
-                return 0
-
-            if clcache_options.clean_cache:
-                clean_cache(cache)
-                print("Cache cleaned")
-                return 0
-
-            if clcache_options.clear_cache:
-                clear_cache(cache)
-                print("Cache cleared")
-                print_statistics(cache)
-                return 0
-
-            if clcache_options.reset_stats:
-                reset_stats(cache)
-                print("Statistics reset")
-                print_statistics(cache)
-                return 0
-
-            if clcache_options.cache_size_gb is not None:
-                max_size_value = clcache_options.cache_size_gb * 1024 * 1024 * 1024
-                if max_size_value < 1:
-                    print("Max size argument must be greater than 0.", file=sys.stderr)
-                    return 1
-
-                cache.configuration.set_max_cache_size(max_size_value)
-                print_statistics(cache)
-                return 0
-
-            if clcache_options.cache_size is not None:
-                max_size_value = clcache_options.cache_size
-                if max_size_value < 1:
-                    print("Max size argument must be greater than 0.", file=sys.stderr)
-                    return 1
-
-                cache.configuration.set_max_cache_size(max_size_value)
-                print_statistics(cache)
-                return 0
-
-        compiler_path = None
-        if compiler_options is not None and compiler_options.compiler:
-            compiler_path = Path(compiler_options.compiler)
-        else:
-            compiler_path = _find_compiler_binary()
-
-        if not (compiler_path and compiler_path.exists()):
-            print(
-                "Failed to locate specified compiler, or exe on PATH (and CLCACHE_CL is not set), aborting."
-            )
-            return 1
-
-        if compiler_path.name.lower() == "moc.exe":
-            import clcache_lib.moc.compiler as compiler
-        else:
-            import clcache_lib.cl.compiler as compiler
-
-        from clcache_lib.cache.ex import LogicException
-        from clcache_lib.utils.util import trace
-
-        trace("Found real compiler binary at '{0!s}'".format(compiler_path))
-
-        if "CLCACHE_DISABLE" in os.environ:
-            return compiler.invoke_real_compiler(compiler_path, compiler_args)[0]
+            exit_code = _handle_clcache_options(clcache_options, cache)
+            if exit_code is not None:
+                return exit_code
 
         try:
-            return compiler.process_compile_request(cache, compiler_path, compiler_args)
+
+            compiler_path, compiler_pkg, args = _get_compiler_path()
+
+            if "CLCACHE_DISABLE" in os.environ:
+                return compiler_pkg.invoke_real_compiler(compiler_path, args)[0]
+
+            return compiler_pkg.process_compile_request(cache, compiler_path, args)
         except LogicException as e:
             print(e)
             return 1
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except Exception as e:
+        # Print exception with full traceback
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)

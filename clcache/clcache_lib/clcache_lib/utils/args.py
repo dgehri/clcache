@@ -87,7 +87,7 @@ def split_comands_file(content):
     return CommandLineTokenizer(content).argv
 
 
-def expand_response_file(cmdline):
+def expand_response_file(cmdline : List[str]) -> List[str]:
     '''
     Expand command line arguments that start with @ to the contents of the (response) file.
     '''

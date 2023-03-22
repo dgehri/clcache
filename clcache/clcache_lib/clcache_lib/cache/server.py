@@ -12,18 +12,21 @@ from typing import Callable
 
 import pyuv
 
+from ..utils.app_singleton import AppSingleton
+from ..utils.named_mutex import NamedMutex
+from ..utils.ready_event import ReadyEvent
+from ..utils.util import trace
+
 # Not the same as VERSION !
 SERVER_VERSION = "1"
 
 PIPE_NAME = fr'\\.\pipe\LOCAL\clcache-626763c0-bebe-11ed-a901-0800200c9a66-{SERVER_VERSION}'
 SINGLETON_NAME = fr"Local\singleton-626763c0-bebe-11ed-a901-0800200c9a66-{SERVER_VERSION}"
+LAUNCH_MUTEX = fr"Local\mutex-626763c0-bebe-11ed-a901-0800200c9a66-{SERVER_VERSION}"
 PIPE_READY_EVENT = fr"Local\ready-626763c0-bebe-11ed-a901-0800200c9a66-{SERVER_VERSION}"
 
 
 BUFFER_SIZE = 65536
-
-ERROR_SUCCESS = 0
-ERROR_ALREADY_EXISTS = 0xB7
 
 
 class HashCache:
@@ -104,7 +107,7 @@ class Connection:
 
 
 class PipeServer:
-    def __init__(self, timeout_s: int = 60):
+    def __init__(self, timeout_s: int = 180):
         self._event_loop = None
         self._timer = None
         self._timeout = timeout_s
@@ -114,13 +117,9 @@ class PipeServer:
 
     def run(self) -> int:
         # ensure only one instance of clcache server is running
-        event = None
-        try:
-            event = windll.kernel32.CreateEventW(None, wintypes.BOOL(True), wintypes.BOOL(
-                False), SINGLETON_NAME)
-            gle = windll.kernel32.GetLastError()
-            if gle == ERROR_ALREADY_EXISTS or gle != ERROR_SUCCESS:
-                return 1
+        with AppSingleton(SINGLETON_NAME) as singleton:
+            if not singleton.created():
+                return 0
 
             self._event_loop = pyuv.Loop.default_loop()  # type: ignore
             self._cache = HashCache(self._event_loop)
@@ -130,10 +129,11 @@ class PipeServer:
             self._pipe_server.listen(self._on_connection)
             signal_handle = None
             try:
-                signal_handle = pyuv.Signal(self._event_loop)  # type: ignore
+                signal_handle = pyuv.Signal( # type: ignore
+                    self._event_loop)
                 signal_handle.start(PipeServer._on_sigterm, signal.SIGTERM)
 
-                # start listening for connections, but stop event loop if idle for 60s
+                # start listening for connections, but stop event loop if idle
                 # create a timer to stop the event loop if idle
                 self._timer.start(self._on_timeout,
                                   self._timeout, self._timeout)
@@ -147,9 +147,6 @@ class PipeServer:
             finally:
                 if signal_handle:
                     signal_handle.close()
-        finally:
-            if event:
-                windll.kernel32.CloseHandle(event)
 
     @staticmethod
     def is_running():
@@ -165,15 +162,7 @@ class PipeServer:
     @staticmethod
     def _signal_server_ready():
         # open existing event and set it
-        event = None
-        try:
-            event = windll.kernel32.OpenEventW(
-                wintypes.DWORD(0x1F0003), wintypes.BOOL(False), PIPE_READY_EVENT)
-            if event != 0:
-                windll.kernel32.SetEvent(event)
-        finally:
-            if event:
-                windll.kernel32.CloseHandle(event)
+        ReadyEvent.signal(PIPE_READY_EVENT)
 
     @staticmethod
     def _on_timeout(handle: pyuv.Timer):  # type: ignore
@@ -198,44 +187,34 @@ class PipeServer:
             h.close()
 
 
-class ReadyEvent:
-    def __init__(self, name: str):
-        self._event = None
-        self._name = name
-
-    def __enter__(self):
-        self._event = windll.kernel32.CreateEventW(None, wintypes.BOOL(True), wintypes.BOOL(
-            False), self._name)
-        return self
-
-    def __exit__(self, exc_type, exc_value, traceback):
-        if self._event:
-            windll.kernel32.CloseHandle(self._event)
-            self._event = None
-
-    def wait(self, timeout_ms: int) -> bool:
-        if self._event != 0:
-            return windll.kernel32.WaitForSingleObject(self._event, timeout_ms) == 0
-        return False
-
-
 def spawn_server(server_idle_timeout_s: int, wait_time_s: int = 10):
-    # if the server isn't running yet, spawn it
-    if PipeServer.is_running():
-        return True
+    # sourcery skip: extract-method
+    
+    with NamedMutex(LAUNCH_MUTEX):
+                
+        # if the server isn't running yet, spawn it
+        if PipeServer.is_running():
+            return True
 
-    with ReadyEvent(PIPE_READY_EVENT) as ready_event:
-
-        args = []
-        if "__compiled__" not in globals():
-            args.append(sys.executable)
-        args.extend(
-            (
-                Path(sys.argv[0]).absolute(),
-                f"--run-server={server_idle_timeout_s}",
+        with ReadyEvent(PIPE_READY_EVENT) as ready_event:
+            args = []
+            if "__compiled__" not in globals():
+                args.append(sys.executable)
+            args.extend(
+                (
+                    Path(sys.argv[0]).absolute(),
+                    f"--run-server={server_idle_timeout_s}",
+                )
             )
-        )
 
-        p = sp.Popen(
-            args, creationflags=sp.CREATE_NEW_PROCESS_GROUP | sp.CREATE_NO_WINDOW)
-        return p.pid != 0 and ready_event.wait(wait_time_s*1000)
+            p = sp.Popen(
+                args, creationflags=sp.CREATE_NEW_PROCESS_GROUP | sp.CREATE_NO_WINDOW)
+            success = p.pid != 0 and ready_event.wait(wait_time_s*1000)
+            if success:
+                trace(
+                    f"Started hash server with timeout {server_idle_timeout_s} seconds")
+            else:
+                trace("Failed to start hash server")
+            return success
+
+

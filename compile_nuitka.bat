@@ -1,4 +1,4 @@
-call venv_py3\Scripts\activate.bat
+call venv_py3\Scripts\activate.batcomp  
 set PATH=C:\Program Files\Conan\conan;%PATH%
 
 pushd clcache\clcache_lib
@@ -14,7 +14,7 @@ conan export-pkg conanfile.py --force
 
 set USER=dgehri
 set CHANNEL=dev
-set VERSION=4.4.3c
+set VERSION=4.4.3j
 
 conan upload clcache/%VERSION%@%USER%/%CHANNEL% --all -r globus-conan-local
 

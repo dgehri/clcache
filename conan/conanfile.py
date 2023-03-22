@@ -1,8 +1,9 @@
 from conans import ConanFile
+from conan.tools.files import rename, rmdir
 
 class ClcacheConan(ConanFile):
     name = "clcache"
-    version = "4.4.3c"
+    version = "4.4.3j"
     author = "Daniel Gehriger <dgehriger@globusmedical.com>"
     settings = "os", "arch"
     description = "A compiler cache for Microsoft Visual Studio"
@@ -13,6 +14,9 @@ class ClcacheConan(ConanFile):
 
     def package(self):
         self.copy("*", dst="bin", src="../clcache.dist")
+        self.copy("clcache.exe", dst="tmp", src="../clcache.dist")
+        rename(self, f"{self.package_folder}/tmp/clcache.exe", f"{self.package_folder}/bin/moccache.exe")
+        rmdir(self, f"{self.package_folder}/tmp")
         self.copy("*", dst=".", src="doc")
 
     def package_info(self):

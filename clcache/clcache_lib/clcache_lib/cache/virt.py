@@ -17,6 +17,10 @@ CONANDIR_REPLACEMENT: str = "<CONAN_USER_HOME>"
 QTDIR_REPLACEMENT: str = "<QT_DIR>"
 LLVM_REPLACEMENT: str = "<LLVM_DIR>"
 
+# LLVM folder path, represented <LLVM> placeholder
+LLVM_DIR_STR: Optional[str] = None
+LLVM_DIR_SHORT_STR: Optional[str] = None
+
 
 class StdStream(Enum):
     STDOUT = 1
@@ -155,6 +159,23 @@ def subst_basedir_with_placeholder(src_code: bytes, src_dir: Path) -> bytes:
     return b'\n'.join(result)
 
 
+def set_llvm_dir(compiler_path: Path) -> None:
+    global LLVM_DIR_STR
+    global LLVM_DIR_SHORT_STR
+    if LLVM_DIR_STR is not None and LLVM_DIR_SHORT_STR is not None:
+        return
+
+    re_llvm_dir = re.compile(r"^(.*)(?=\\bin\\clang-cl.exe)", re.IGNORECASE)
+
+    long_path = get_long_path_name(compiler_path)
+    if match := re_llvm_dir.match(str(long_path)):
+        LLVM_DIR_STR = match[1].lower()
+
+    short_path = get_short_path_name(compiler_path)
+    if match := re_llvm_dir.match(str(short_path)):
+        LLVM_DIR_SHORT_STR = match[1].lower()
+
+
 subst_basedir_with_placeholder.INCLUDE_RE = \
     re.compile(br"^\s*#\s*include\s*(?:[\"<])(.*)[\">]", re.IGNORECASE)
 subst_basedir_with_placeholder.COMMENT_RE = \
@@ -179,20 +200,6 @@ def is_in_build_dir(path: Path, is_lower=False) -> bool:
 @is_in_build_dir.register(str)
 def _(path: str, is_lower=False) -> bool:
     return is_subdir(path, BUILDDIR_STR, is_lower) or is_subdir(path, BUILDDIR_RESOLVED_STR, is_lower)
-
-
-def set_llvm_dir(compiler_path: Path) -> None:
-    re_llvm_dir = re.compile(r"^(.*)(?=\\bin\\clang-cl.exe)", re.IGNORECASE)
-
-    long_path = get_long_path_name(compiler_path)
-    if match := re_llvm_dir.match(str(long_path)):
-        global LLVM_DIR_STR
-        LLVM_DIR_STR = match[1].lower()
-
-    short_path = get_short_path_name(compiler_path)
-    if match := re_llvm_dir.match(str(short_path)):
-        global LLVM_DIR_SHORT_STR
-        LLVM_DIR_SHORT_STR = match[1].lower()
 
 
 @functools.singledispatch
@@ -252,12 +259,20 @@ def _get_build_dir() -> Path:
     Get the build directory.
 
     Get the build directory from the CLCACHE_BUILDDIR environment 
-    variable. If it is not set, use the current working directory.
+    variable. If it is not set, use the current working directory 
+    to determine it.
     '''
     if value := os.environ.get("CLCACHE_BUILDDIR"):
         build_dir = Path(value)
         if build_dir.exists():
             return _normalize_dir(build_dir)
+
+    # walk up the directory tree, starting at the current working directory,
+    # to find the build directory, as determined by the existence of the
+    # CMakeCache.txt file
+    for path in [Path.cwd()] + list(Path.cwd().parents):
+        if (path / "CMakeCache.txt").exists():
+            return _normalize_dir(path)
 
     return _normalize_dir(Path.cwd())
 
@@ -334,10 +349,6 @@ CONAN_USER_HOME: Optional[Path] = None
 
 # Qt folder path, represented <QT_DIR> placeholder
 QT_DIR_STR: Optional[str] = None
-
-# LLVM folder path, represented <LLVM> placeholder
-LLVM_DIR_STR: Optional[str] = None
-LLVM_DIR_SHORT_STR: Optional[str] = None
 
 
 def _expand_conan_placeholder(conan_user_home: Path, path_str: str) -> Path:
