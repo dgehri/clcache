@@ -11,6 +11,7 @@ import os
 import sys
 from pathlib import Path
 from shutil import which
+import time
 from types import ModuleType
 from typing import List, Optional, Tuple
 
@@ -196,14 +197,15 @@ def _get_compiler_path() -> Tuple[Path, ModuleType, List[str]]:
             # Locate "moccache.json" in current directory and parent directories, next to "CMakeCache.txt"
             for path in [Path.cwd()] + list(Path.cwd().parents):
                 if (path / "CMakeCache.txt").exists():
-                    moccache_json = path / "moccache.json"
-                    if (moccache_json).exists():
+                    moccache_json = path / "moccache_config.json"
+                    # test if exists and is readable
+                    if moccache_json.exists() and moccache_json.is_file():
                         # read compiler path from moccache.json
                         import json
-                        with FileLock.for_path(moccache_json):
-                            with open(moccache_json, "r") as f:
-                                config = json.load(f)
-                                compiler_path = Path(config["moc_path"])
+                        with open(moccache_json, "r") as f:
+                            config = json.load(f)
+                            compiler_path = Path(
+                                config["moc_path"])
                     break
                 path = path.parent
 
@@ -216,7 +218,7 @@ def _get_compiler_path() -> Tuple[Path, ModuleType, List[str]]:
             "Failed to locate specified compiler, or exe on PATH (and CLCACHE_CL is not set), aborting."
         )
 
-    log("Found real compiler binary at {0}".format(compiler_path.as_posix()))
+    log(f"Found real compiler binary at {compiler_path}")
     return compiler_path, compiler_pkg, args
 
 
@@ -259,9 +261,10 @@ if __name__ == "__main__":
         # Print exception with full traceback
         import traceback
         traceback.print_exc()
-        
+
         # Also try to log
-        log("Exception: {0!s}".format(traceback.format_exc()), level=LogLevel.ERROR)
+        log("Exception: {0!s}".format(
+            traceback.format_exc()), level=LogLevel.ERROR)
         sys.exit(1)
     finally:
         flush_logger()

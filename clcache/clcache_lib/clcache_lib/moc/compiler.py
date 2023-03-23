@@ -140,8 +140,8 @@ class MocCommandLineAnalyzer(CommandLineAnalyzer):
         else:
             raise CalledWithoutOutputFile()
 
-        log(f"MOC input file: {input_file.as_posix()}")
-        log(f"MOC output file: {output_file.as_posix()}")
+        log(f"MOC input file: {input_file}")
+        log(f"MOC output file: {output_file}")
         return input_file, output_file, options
 
 

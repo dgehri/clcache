@@ -86,7 +86,7 @@ class ManifestSection:
         '''Writes manifest to disk and returns the size of the manifest file'''
         manifest_path = self.manifest_path(manifest_hash)
         log(
-            f"Writing manifest with manifest_hash = {manifest_hash} to {manifest_path.as_posix()}")
+            f"Writing manifest with manifest_hash = {manifest_hash} to {manifest_path}")
         ensure_dir_exists(self.manifestSectionDir)
 
         # Retry writing manifest file in case of concurrent
@@ -103,7 +103,7 @@ class ManifestSection:
                 return manifest_path.stat().st_size
             except Exception as e:
                 log(
-                    f"Failed to write manifest file {manifest_path.as_posix()}: {traceback.format_exc()} (retrying)")
+                    f"Failed to write manifest file {manifest_path}: {traceback.format_exc()} (retrying)")
                 if i == 9:
                     raise
                 time.sleep(0.5)
@@ -137,7 +137,7 @@ class ManifestSection:
             return None
         except (ValueError, KeyError):
             log(
-                f"Manifest file {manifest_file.as_posix()} was broken", LogLevel.ERROR)
+                f"Manifest file {manifest_file} was broken", LogLevel.ERROR)
             return None
 
 
@@ -492,7 +492,7 @@ class CacheFileStrategy:
 
     def __str__(self):
         assert self.dir is not None
-        return f"disk cache at {self.dir.as_posix()}"
+        return f"disk cache at {self.dir}"
 
     def manifest_lock_for(self, key: str) -> FileLock:
         '''Get the lock for the given key or raise a KeyError if the entry does not exist.'''

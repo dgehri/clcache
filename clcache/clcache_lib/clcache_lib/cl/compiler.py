@@ -309,8 +309,8 @@ class ClCommandLineAnalyzer(CommandLineAnalyzer):
                 for f, _ in input_files
             ]
 
-        log(f"Compiler source files: {[f.as_posix() for f, _ in input_files]}")
-        log(f"Compiler object file: {[f.as_posix() for f in obj_files]}")
+        log(f"Compiler source files: {';'.join([str(f) for f, _ in input_files])}")
+        log(f"Compiler object file: {';'.join([str(f) for f in obj_files])}")
         return input_files, obj_files
 
 
