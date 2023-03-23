@@ -1,12 +1,11 @@
 from ctypes import windll, wintypes
 from pathlib import Path
 
-# import datetime
-from .ex import CacheLockException
 
-# from ..utils import trace
+class FileLockException(Exception):
+    pass
 
-class CacheLock:
+class FileLock:
     """Implements a lock for the object cache which
     can be used in 'with' statements."""
 
@@ -53,7 +52,7 @@ class CacheLock:
                     result=result, error=windll.kernel32.GetLastError()
                 )
             # trace(errorString, 0)                
-            raise CacheLockException(error_string)
+            raise FileLockException(error_string)
         
         # elapsed = (datetime.datetime.now() - self._t0).total_seconds()
         # trace(f"Acquired lock {self._mutexName} after {elapsed:.3f} s", 0)
@@ -67,4 +66,4 @@ class CacheLock:
     def for_path(path: Path):
         timeout_ms = 10 * 1000
         lock_name = str(path).replace(":", "-").replace("\\", "-")
-        return CacheLock(lock_name, timeout_ms)
+        return FileLock(lock_name, timeout_ms)

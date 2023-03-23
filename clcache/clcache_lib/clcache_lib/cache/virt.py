@@ -7,7 +7,8 @@ from pathlib import Path
 from typing import List, Optional
 
 from ..utils import (get_long_path_name, get_short_path_name, line_iter,
-                     line_iter_b, resolve)
+                     line_iter_b, normalize_dir, resolve)
+from ..utils.util import get_build_dir
 from .ex import LogicException
 
 # The folowing replacement strings are used to canonicalize paths in the cache.
@@ -233,48 +234,13 @@ def _get_env_path(env: str) -> Optional[Path]:
     return resolve(Path(value)) if (value := os.getenv(env)) else None
 
 
-@functools.cache
-def _normalize_dir(dir_path: Path) -> Path:
-    '''
-    Normalize a directory path, removing trailing slashes.
-
-    This is a workaround for https://bugs.python.org/issue9949
-    '''
-    result = os.path.normcase(os.path.abspath(os.path.normpath(str(dir_path))))
-    if result.endswith(os.path.sep):
-        result = result[:-1]
-    return Path(result)
-
 
 @functools.cache
 def _get_dir_resolved(path: Path) -> Optional[Path]:
     '''Resolve a path, if it exists.'''
     with contextlib.suppress(Exception):
-        resolved = _normalize_dir(resolve(path))
+        resolved = normalize_dir(resolve(path))
         return resolved if resolved != path else None
-
-
-def _get_build_dir() -> Path:
-    '''
-    Get the build directory.
-
-    Get the build directory from the CLCACHE_BUILDDIR environment 
-    variable. If it is not set, use the current working directory 
-    to determine it.
-    '''
-    if value := os.environ.get("CLCACHE_BUILDDIR"):
-        build_dir = Path(value)
-        if build_dir.exists():
-            return _normalize_dir(build_dir)
-
-    # walk up the directory tree, starting at the current working directory,
-    # to find the build directory, as determined by the existence of the
-    # CMakeCache.txt file
-    for path in [Path.cwd()] + list(Path.cwd().parents):
-        if (path / "CMakeCache.txt").exists():
-            return _normalize_dir(path)
-
-    return _normalize_dir(Path.cwd())
 
 
 def _get_base_dir(build_dir: Path) -> Optional[Path]:
@@ -287,7 +253,7 @@ def _get_base_dir(build_dir: Path) -> Optional[Path]:
     if value := os.environ.get("CLCACHE_BASEDIR"):
         base_dir = Path(value)
         if base_dir.exists():
-            return _normalize_dir(base_dir)
+            return normalize_dir(base_dir)
 
     # try loading from CMakeCache.txt inside CLCACHE_BUILDDIR
     cmake_cache_txt = build_dir / "CMakeCache.txt"
@@ -306,11 +272,11 @@ def _get_base_dir(build_dir: Path) -> Optional[Path]:
             if name == "CMAKE_HOME_DIRECTORY":
                 path = Path(value)
                 if path.exists():
-                    return _normalize_dir(path)
+                    return normalize_dir(path)
 
 
 # This is the build dir, where the compiler is executed
-BUILDDIR_STR: str = str(_get_build_dir()).lower()
+BUILDDIR_STR: str = str(get_build_dir()).lower()
 
 # This is the resolved build dir, where the compiler is executed
 BUILDDIR_RESOLVED_STR: Optional[str] = str(

@@ -5,10 +5,6 @@ class IncludeNotFoundException(Exception):
     pass
 
 
-class CacheLockException(Exception):
-    pass
-
-
 class CompilerFailedException(Exception):
     def __init__(self, exit_code: int, msg_err: str, msg_out: str = ""):
         super(CompilerFailedException, self).__init__(msg_err)

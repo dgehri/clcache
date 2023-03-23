@@ -7,6 +7,7 @@ import sys
 import time
 from pathlib import Path
 from tempfile import TemporaryFile
+import traceback
 from typing import Dict, Iterator, List, Optional, Set, Tuple
 
 from ..cache import *  # type: ignore
@@ -17,13 +18,11 @@ from ..cache.stats import MissReason
 from ..cache.virt import (StdStream, canonicalize_path, expand_compile_output,
                           set_llvm_dir)
 from ..config import CL_DEFAULT_CODEC
-from ..utils import trace
 from ..utils.args import (ArgumentT1, ArgumentT2, ArgumentT3, ArgumentT4,
                           CommandLineAnalyzer, expand_response_file,
                           split_comands_file)
 from ..utils.errors import *
-from ..utils.util import (copy_from_cache, line_iter, print_stdout_and_stderr,
-                          trace)
+from ..utils.util import (line_iter, print_stdout_and_stderr)
 from . import *  # type: ignore
 
 
@@ -50,7 +49,7 @@ def invoke_real_compiler(compiler_path: Path,
                 environment,
             )
 
-    trace(f"Invoking real compiler as {read_cmd_line}")
+    log(f"Invoking real compiler as {' '.join(read_cmd_line)}")
 
     environment = environment or dict(os.environ)
 
@@ -71,7 +70,7 @@ def invoke_real_compiler(compiler_path: Path,
             )
             return_code = compilerProcess.wait()
             stdout_file.seek(0)
-            stdout = stdout_file.read().decode(CL_DEFAULT_CODEC) # type: ignore
+            stdout = stdout_file.read().decode(CL_DEFAULT_CODEC)  # type: ignore
             stderr_file.seek(0)
             stderr = stderr_file.read().decode(CL_DEFAULT_CODEC)
     else:
@@ -79,9 +78,10 @@ def invoke_real_compiler(compiler_path: Path,
         sys.stderr.flush()
         return_code = subprocess.call(read_cmd_line, env=environment)
 
-    trace("Real compiler returned code {0:d}".format(return_code))
+    log("Real compiler returned code {0:d}".format(return_code))
 
     return return_code, stdout, stderr
+
 
 def process_compile_request(cache: Cache, compiler_path: Path, args: List[str]) -> int:
     '''
@@ -90,13 +90,13 @@ def process_compile_request(cache: Cache, compiler_path: Path, args: List[str]) 
     Returns:
         The exit code of the compiler.
     '''
-    trace("Parsing given commandline '{0!s}'".format(args))
+    log("Parsing given commandline '{0!s}'".format(" ".join(args)))
 
     set_llvm_dir(compiler_path)
 
     cmdline, environment = _extend_cmdline_from_env(args, dict(os.environ))
     cmdline = expand_response_file(cmdline)
-    trace("Expanded commandline '{0!s}'".format(cmdline))
+    log("Expanded commandline '{0!s}'".format(" ".join(cmdline)))
 
     try:
         analyzer = ClCommandLineAnalyzer()
@@ -105,32 +105,33 @@ def process_compile_request(cache: Cache, compiler_path: Path, args: List[str]) 
             cache, compiler_path, cmdline, environment, src_files, obj_files, analyzer
         )
     except InvalidArgumentError:
-        trace(f"Cannot cache invocation as {cmdline}: invalid argument")
+        log(f"Cannot cache invocation as {cmdline}: invalid argument",
+            LogLevel.ERROR)
         cache.statistics.record_cache_miss(
             MissReason.CALL_WITH_INVALID_ARGUMENT)
     except NoSourceFileError:
-        trace(f"Cannot cache invocation as {cmdline}: no source file found")
+        log(f"Cannot cache invocation as {cmdline}: no source file found")
         cache.statistics.record_cache_miss(MissReason.CALL_WITHOUT_SOURCE_FILE)
     except MultipleSourceFilesComplexError:
-        trace(
+        log(
             f"Cannot cache invocation as {cmdline}: multiple source files found")
         cache.statistics.record_cache_miss(
             MissReason.CALL_WITH_MULTIPLE_SOURCE_FILES)
     except CalledWithPchError:
-        trace(
+        log(
             f"Cannot cache invocation as {cmdline}: precompiled headers in use")
         cache.statistics.record_cache_miss(MissReason.CALL_WITH_PCH)
     except CalledForLinkError:
-        trace(f"Cannot cache invocation as {cmdline}: called for linking")
+        log(f"Cannot cache invocation as {cmdline}: called for linking")
         cache.statistics.record_cache_miss(MissReason.CALL_FOR_LINKING)
     except ExternalDebugInfoError:
-        trace(
+        log(
             f"Cannot cache invocation as {cmdline}: external debug information (/Zi) is not supported"
         )
         cache.statistics.record_cache_miss(
             MissReason.CALL_FOR_EXTERNAL_DEBUG_INFO)
     except CalledForPreprocessingError:
-        trace(
+        log(
             f"Cannot cache invocation as {cmdline}: called for preprocessing")
         cache.statistics.record_cache_miss(MissReason.CALL_FOR_PREPROCESSING)
 
@@ -308,10 +309,9 @@ class ClCommandLineAnalyzer(CommandLineAnalyzer):
                 for f, _ in input_files
             ]
 
-        trace(f"Compiler source files: {input_files}")
-        trace(f"Compiler object file: {obj_files}")
+        log(f"Compiler source files: {[f.as_posix() for f, _ in input_files]}")
+        log(f"Compiler object file: {[f.as_posix() for f in obj_files]}")
         return input_files, obj_files
-
 
 
 def _job_count(cmd_line: List[str]) -> int:
@@ -341,7 +341,6 @@ def _job_count(cmd_line: List[str]) -> int:
         return 2
 
 
-
 def _process_cache_hit(cache: Cache, obj_file: Path, cache_key: str) -> Tuple[int, str, str]:
     """
     Process a cache hit, copying the object file from the cache to the output directory.
@@ -355,7 +354,7 @@ def _process_cache_hit(cache: Cache, obj_file: Path, cache_key: str) -> Tuple[in
         Returns:
             A tuple of the exit code, the stdout, the stderr
     """
-    trace(
+    log(
         f"Reusing cached object for key {cache_key} for object file {obj_file}")
 
     with cache.lock_for(cache_key):
@@ -369,7 +368,8 @@ def _process_cache_hit(cache: Cache, obj_file: Path, cache_key: str) -> Tuple[in
                     success = True
                     break
                 except Exception:
-                    trace(f"Failed to delete object file {obj_file}, retrying...")
+                    log(
+                        f"Failed to delete object file {obj_file}, retrying...", LogLevel.WARN)
                     time.sleep(1)
 
             if not success:
@@ -448,7 +448,7 @@ def _schedule_jobs(
         exit_code, out, err = _process_single_source(
             cache, compiler, job_cmdline, src_file, obj_file, environment, analyzer
         )
-        trace(f"Finished. Exit code {exit_code}")
+        log(f"Finished. Exit code {exit_code}")
         print_stdout_and_stderr(out, err, CL_DEFAULT_CODEC)
     else:
         with concurrent.futures.ThreadPoolExecutor(
@@ -471,7 +471,7 @@ def _schedule_jobs(
                 )
             for future in concurrent.futures.as_completed(jobs):
                 exit_code, out, err = future.result()
-                trace("Finished. Exit code {0:d}".format(exit_code))
+                log("Finished. Exit code {0:d}".format(exit_code))
                 print_stdout_and_stderr(out, err, CL_DEFAULT_CODEC)
 
                 if exit_code != 0:
@@ -509,7 +509,8 @@ def _process_single_source(cache: Cache,
     except CompilerFailedException as e:
         return e.get_compiler_result()
     except Exception as e:
-        trace(f"Exception occurred: {e}")
+        # format exception with full call stack to string
+        log(f"Exception occurred: {traceback.format_exc()}", LogLevel.ERROR)
         return invoke_real_compiler(compiler, cmdline, environment=environment)
 
 
@@ -539,7 +540,7 @@ def _process(cache: Cache,
     # Acquire lock for manifest hash to prevent two jobs from compiling the same source
     # file at the same time. This is a frequent situation on Jenkins, and having the 2nd
     # job wait for the 1st job to finish compiling the source file is more efficient overall.
-    with CacheLock(manifest_hash, 120*1000*1000):
+    with FileLock(manifest_hash, 120*1000*1000):
         manifest_hit = False
         cachekey = None
 
@@ -578,10 +579,11 @@ def _process(cache: Cache,
                                     # Move manifest entry to the top of the entries in the manifest
                                     # (if not already at top), so that we can use LRU replacement
                                     if entry_index > 0:
-                                        trace("Moving manifest entry to top of manifest")
+                                        log("Moving manifest entry to top of manifest")
                                         manifest.touch_entry(cachekey)
-                                        cache.set_manifest(manifest_hash, manifest)
-                                        
+                                        cache.set_manifest(
+                                            manifest_hash, manifest)
+
                                     # Object cache hit!
                                     return _process_cache_hit(cache, obj_file, cachekey)
 
@@ -594,7 +596,7 @@ def _process(cache: Cache,
 
         # If we get here, we have a cache miss and we'll need to invoke the real compiler
         if manifest_hit:
-            trace("Manifest hit, but no object file found in cache")
+            log("Manifest hit, but no object file found in cache")
             # Got a manifest, but no object => invoke real compiler
             compiler_result = invoke_real_compiler(
                 compiler_path, cmdline, capture_output=True)
@@ -605,7 +607,7 @@ def _process(cache: Cache,
                     cache, cachekey, miss_reason, obj_file, compiler_result
                 )
         else:
-            trace("Manifest miss, invoking real compiler")
+            log("Manifest miss, invoking real compiler")
             # Also generate manifest
             strip_includes = False
             if "/showIncludes" not in cmdline:
@@ -681,7 +683,7 @@ def _ensure_artifacts_exist(cache: Cache, cache_key: str,
                 compiler_stderr, StdStream.STDERR),
         )
 
-        trace(
+        log(
             f"Adding file {artifacts.obj_file_path} to cache using key {cache_key}")
 
         add_object_to_cache(cache, cache_key, artifacts, reason, action)

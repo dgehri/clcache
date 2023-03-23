@@ -7,12 +7,13 @@ import sys
 import time
 from pathlib import Path
 from tempfile import TemporaryFile
+import traceback
 from typing import Callable, Dict, List, Optional, Tuple
 
 from ..cache.cache import Cache, add_object_to_cache
-from ..cache.cache_lock import CacheLock
 from ..cache.ex import CompilerFailedException, IncludeNotFoundException
-from ..cache.file_cache import CompilerArtifacts, Manifest, ManifestRepository
+from ..cache.file_cache import (CompilerArtifacts, Manifest,
+                                ManifestRepository, copy_from_cache)
 from ..cache.hash import get_compiler_hash, get_file_hash
 from ..cache.manifest_entry import create_manifest_entry
 from ..cache.stats import MissReason
@@ -24,7 +25,9 @@ from ..utils.args import (ArgumentQtLong, ArgumentQtLongWithParam,
                           ArgumentQtShort, ArgumentQtShortWithParam,
                           CommandLineAnalyzer, expand_response_file)
 from ..utils.errors import *
-from ..utils.util import copy_from_cache, print_stdout_and_stderr, trace
+from ..utils.file_lock import FileLock
+from ..utils.logging import LogLevel, log
+from ..utils.util import print_stdout_and_stderr
 
 
 class MocCommandLineAnalyzer(CommandLineAnalyzer):
@@ -137,8 +140,8 @@ class MocCommandLineAnalyzer(CommandLineAnalyzer):
         else:
             raise CalledWithoutOutputFile()
 
-        trace(f"MOC input file: {input_file}")
-        trace(f"MOC output file: {output_file}")
+        log(f"MOC input file: {input_file.as_posix()}")
+        log(f"MOC output file: {output_file.as_posix()}")
         return input_file, output_file, options
 
 
@@ -164,7 +167,7 @@ def invoke_real_compiler(compiler_path: Path,
                 environment,
             )
 
-    trace(f"Invoking real compiler as {read_cmd_line}")
+    log(f"Invoking real compiler as {read_cmd_line}")
 
     environment = environment or dict(os.environ)
 
@@ -193,7 +196,7 @@ def invoke_real_compiler(compiler_path: Path,
         sys.stderr.flush()
         return_code = subprocess.call(read_cmd_line, env=environment)
 
-    trace("Real compiler returned code {0:d}".format(return_code))
+    log("Real compiler returned code {0:d}".format(return_code))
 
     return return_code, stdout, stderr
 
@@ -205,12 +208,12 @@ def process_compile_request(cache: Cache, compiler: Path, args: List[str]) -> in
     Returns:
         The exit code of the compiler.
     '''
-    trace("Parsing given commandline '{0!s}'".format(args))
+    log("Parsing given commandline '{0!s}'".format(" ".join(args)))
 
     cmdline = expand_response_file(args)
     environment = dict(os.environ)
 
-    trace("Expanded commandline '{0!s}'".format(cmdline))
+    log("Expanded commandline '{0!s}'".format(" ".join(cmdline)))
 
     try:
         analyzer = MocCommandLineAnalyzer()
@@ -220,45 +223,46 @@ def process_compile_request(cache: Cache, compiler: Path, args: List[str]) -> in
             header_file, output_file, analyzer, options
         )
     except InvalidArgumentError:
-        trace(f"Cannot cache invocation as {cmdline}: invalid argument")
+        log(f"Cannot cache invocation as {cmdline}: invalid argument",
+            LogLevel.ERROR)
         cache.statistics.record_cache_miss(
             MissReason.CALL_WITH_INVALID_ARGUMENT)
     except NoSourceFileError:
-        trace(f"Cannot cache invocation as {cmdline}: no source file found")
+        log(f"Cannot cache invocation as {cmdline}: no source file found")
         cache.statistics.record_cache_miss(MissReason.CALL_WITHOUT_SOURCE_FILE)
     except MultipleSourceFilesComplexError:
-        trace(
+        log(
             f"Cannot cache invocation as {cmdline}: multiple source files found")
         cache.statistics.record_cache_miss(
             MissReason.CALL_WITH_MULTIPLE_SOURCE_FILES)
     except CalledWithPchError:
-        trace(
+        log(
             f"Cannot cache invocation as {cmdline}: precompiled headers in use")
         cache.statistics.record_cache_miss(MissReason.CALL_WITH_PCH)
     except CalledForLinkError:
-        trace(f"Cannot cache invocation as {cmdline}: called for linking")
+        log(f"Cannot cache invocation as {cmdline}: called for linking")
         cache.statistics.record_cache_miss(MissReason.CALL_FOR_LINKING)
     except ExternalDebugInfoError:
-        trace(
+        log(
             f"Cannot cache invocation as {cmdline}: external debug information (/Zi) is not supported"
         )
         cache.statistics.record_cache_miss(
             MissReason.CALL_FOR_EXTERNAL_DEBUG_INFO)
     except CalledForPreprocessingError:
-        trace(
+        log(
             f"Cannot cache invocation as {cmdline}: called for preprocessing")
         cache.statistics.record_cache_miss(MissReason.CALL_FOR_PREPROCESSING)
 
     except CalledForJsonOutputError:
-        trace(
+        log(
             f"Cannot cache invocation as {cmdline}: called for JSON output")
         cache.statistics.record_cache_miss(MissReason.CACHE_FAILURE)
 
     except CalledWithoutOutputFile:
-        trace(
+        log(
             f"Cannot cache invocation as {cmdline}: called without output file")
         cache.statistics.record_cache_miss(MissReason.CACHE_FAILURE)
-        
+
     exit_code, out, err = invoke_real_compiler(compiler, args)
     print_stdout_and_stderr(out, err, CL_DEFAULT_CODEC)
     return exit_code
@@ -284,7 +288,7 @@ def _schedule_jobs(
         cache, compiler, cmd_line, header_file,
         output_file, environment, analyzer, options
     )
-    trace("Finished. Exit code {0:d}".format(exit_code))
+    log("Finished. Exit code {0:d}".format(exit_code))
     print_stdout_and_stderr(out, err, CL_DEFAULT_CODEC)
 
     return exit_code
@@ -309,10 +313,10 @@ def _process_single_source(cache: Cache,
         return _process(cache, output_file, compiler, cmdline, header_file, analyzer, options)
 
     except CompilerFailedException as e:
-        trace(f"Compiler failed: {e}")
+        log(f"Compiler failed: {traceback.format_exc()}")
         return e.get_compiler_result()
     except Exception as e:
-        trace(f"Exception occurred: {e}")
+        log(f"Exception occurred: {traceback.format_exc()}")
         return invoke_real_compiler(compiler, cmdline, environment=environment)
 
 
@@ -343,7 +347,7 @@ def _process(cache: Cache,
     # Acquire lock for manifest hash to prevent two jobs from compiling the same source
     # file at the same time. This is a frequent situation on Jenkins, and having the 2nd
     # job wait for the 1st job to finish compiling the source file is more efficient overall.
-    with CacheLock(manifest_hash, 120*1000*1000):
+    with FileLock(manifest_hash, 120*1000*1000):
         manifest_hit = False
         cachekey = None
 
@@ -499,7 +503,7 @@ def ensure_artifacts_exist(cache: Cache, cache_key: str,
                 compiler_stderr, StdStream.STDERR),
         )
 
-        trace(
+        log(
             f"Adding file {artifacts.obj_file_path} to cache using key {cache_key}")
 
         add_object_to_cache(cache, cache_key, artifacts, reason, action)
@@ -574,14 +578,17 @@ def _create_dep_file(dep_file_path: Path,
                      rule: Path,
                      include_paths: List[str]) -> None:
     """Create a dependency file."""
+    def escaped_path(path: Path) -> str:
+        return path.as_posix().replace("\\", "\\\\").replace(" ", "\\ ")
+
     with dep_file_path.open("w") as dep_file:
-        dep_file.write(f"{rule.as_posix()}: ")
+        dep_file.write(f"{escaped_path(rule)}:")
 
         for include_path in include_paths:
             # expand include_path
             expanded_include_path = expand_path(include_path)
 
-            dep_file.write(f" \\\n  {expanded_include_path.as_posix()}")
+            dep_file.write(f" \\\n  {escaped_path(expanded_include_path)}")
 
         dep_file.write("\n")
 
@@ -602,7 +609,7 @@ def _process_cache_hit(cache: Cache,
         Returns:
             A tuple of the exit code, the stdout, the stderr
     """
-    trace(
+    log(
         f"Reusing cached object for key {cache_key} for object file {obj_file}")
 
     with cache.lock_for(cache_key):
@@ -632,10 +639,13 @@ def _parse_dep_file(dep_file_path: Path) -> List[Path]:
         if m := re.match(r"^(\s*(?:[a-zA-Z]:)?[^:]*:)", buf):
             buf = buf[m.end() + 1:]
 
-            # Split buf into lines, ignoring trailing backslashes
-            lines = re.split(r"\\\r?\n", buf)               
+            # join lines ending with a backslash
+            buf = re.sub(r"\\\r?\n", "", buf)
+
+            # split at whitespace not preceded by a backslash
+            lines = filter(None, re.split(r"(?<!\\)\s+", buf))
 
             # convert the list of strings into a list of Path objects
-            return [Path(os.path.normpath(line.strip())).absolute() for line in lines]
+            return [Path(os.path.normpath(line.replace("\\", "").strip())).absolute() for line in lines]
 
     return []

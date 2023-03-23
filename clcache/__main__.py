@@ -16,7 +16,8 @@ from typing import List, Optional, Tuple
 
 from clcache_lib.cache.ex import LogicException
 from clcache_lib.config import VERSION
-from clcache_lib.utils.util import trace
+from clcache_lib.utils.logging import LogLevel, flush_logger, init_logger, log
+from clcache_lib.utils.util import get_build_dir
 
 
 def _parse_args() -> Optional[argparse.Namespace]:
@@ -192,7 +193,7 @@ def _get_compiler_path() -> Tuple[Path, ModuleType, List[str]]:
 
         if compiler_path is None:
             # Locate "moccache.json" in current directory and parent directories, next to "CMakeCache.txt"
-            for path in [ Path.cwd() ] + list(Path.cwd().parents):
+            for path in [Path.cwd()] + list(Path.cwd().parents):
                 if (path / "CMakeCache.txt").exists():
                     if (path / "moccache.json").exists():
                         # read compiler path from moccache.json
@@ -212,12 +213,11 @@ def _get_compiler_path() -> Tuple[Path, ModuleType, List[str]]:
             "Failed to locate specified compiler, or exe on PATH (and CLCACHE_CL is not set), aborting."
         )
 
-    trace("Found real compiler binary at '{0!s}'".format(compiler_path))
+    log("Found real compiler binary at {0}".format(compiler_path.as_posix()))
     return compiler_path, compiler_pkg, args
 
 
 def main() -> int:
-
     clcache_options = _parse_args()
     if clcache_options is not None and clcache_options.run_server is not None:
         # Run clcache server
@@ -239,24 +239,26 @@ def main() -> int:
             if exit_code is not None:
                 return exit_code
 
-        try:
+        compiler_path, compiler_pkg, args = _get_compiler_path()
 
-            compiler_path, compiler_pkg, args = _get_compiler_path()
+        if "CLCACHE_DISABLE" in os.environ:
+            return compiler_pkg.invoke_real_compiler(compiler_path, args)[0]
 
-            if "CLCACHE_DISABLE" in os.environ:
-                return compiler_pkg.invoke_real_compiler(compiler_path, args)[0]
-
-            return compiler_pkg.process_compile_request(cache, compiler_path, args)
-        except LogicException as e:
-            print(e)
-            return 1
+        return compiler_pkg.process_compile_request(cache, compiler_path, args)
 
 
 if __name__ == "__main__":
     try:
+        # get build folder
+        init_logger(get_build_dir())
         sys.exit(main())
     except Exception as e:
         # Print exception with full traceback
         import traceback
         traceback.print_exc()
+        
+        # Also try to log
+        log("Exception: {0!s}".format(traceback.format_exc()), level=LogLevel.ERROR)
         sys.exit(1)
+    finally:
+        flush_logger()

@@ -6,7 +6,7 @@ from typing import Dict
 
 from atomicwrites import atomic_write
 
-from .cache_lock import CacheLock
+from ..utils.file_lock import FileLock
 
 
 class PersistentJsonDict:
@@ -17,7 +17,7 @@ class PersistentJsonDict:
         self._file_name = file_name
         self._dict = defaultdict(int)
         self._mtime = None
-        with CacheLock.for_path(file_name):
+        with FileLock.for_path(file_name):
             if self._file_name.exists():
                 self._load()
 
@@ -30,7 +30,7 @@ class PersistentJsonDict:
 
     def save(self, callback=None):
         with contextlib.suppress(Exception):
-            with CacheLock.for_path(self._file_name):
+            with FileLock.for_path(self._file_name):
 
                 # if on-disk file has changed, reload it first
                 if self._file_name.exists() and self._mtime != self._file_name.stat().st_mtime:

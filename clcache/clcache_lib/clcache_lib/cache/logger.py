@@ -9,115 +9,83 @@ import subprocess as sp
 import sys
 from ctypes import windll, wintypes
 from pathlib import Path
-from typing import Callable, List
+import threading
+from typing import Callable
 
 import pyuv
 
 from ..utils.app_singleton import AppSingleton
 from ..utils.named_mutex import NamedMutex
 from ..utils.ready_event import ReadyEvent
-from clcache_lib.utils.logging import LogLevel, log
+from ..utils.util import trace
 
 # Not the same as VERSION !
 SERVER_VERSION = "1"
 
-PIPE_NAME = fr'\\.\pipe\LOCAL\clcache-626763c0-bebe-11ed-a901-0800200c9a66-{SERVER_VERSION}'
-SINGLETON_NAME = fr"Local\singleton-626763c0-bebe-11ed-a901-0800200c9a66-{SERVER_VERSION}"
-LAUNCH_MUTEX = fr"Local\mutex-626763c0-bebe-11ed-a901-0800200c9a66-{SERVER_VERSION}"
-PIPE_READY_EVENT = fr"Local\ready-626763c0-bebe-11ed-a901-0800200c9a66-{SERVER_VERSION}"
+PIPE_NAME = fr'\\.\pipe\LOCAL\clcache-835c7daa-96ee-4307-8533-55348ba3ed22-{SERVER_VERSION}'
+SINGLETON_NAME = fr"Local\singleton-835c7daa-96ee-4307-8533-55348ba3ed22-{SERVER_VERSION}"
+LAUNCH_MUTEX = fr"Local\mutex-835c7daa-96ee-4307-8533-55348ba3ed22-{SERVER_VERSION}"
+PIPE_READY_EVENT = fr"Local\ready-835c7daa-96ee-4307-8533-55348ba3ed22-{SERVER_VERSION}"
 
 
 BUFFER_SIZE = 65536
-# Define some Win32 API constants here to avoid dependency on win32pipe
 NMPWAIT_WAIT_FOREVER = wintypes.DWORD(0xFFFFFFFF)
 ERROR_PIPE_BUSY = 231
 
 
-class HashCache:
-    def __init__(self, loop):
-        self._loop = loop
-        self._watched_dirs = {}
-        self._handlers = []
+class LogSink:
+    """Class for writing log messages to a file."""
 
-    def get_file_hash(self, path: Path) -> str:
-        watched_dir = self._watched_dirs.get(path.parent, {})
+    def __init__(self, log_path: Path):
+        self._file = open(log_path, "w")
+        self._lock = threading.Lock()
 
-        if file_hash := watched_dir.get(path.name):
-            # path in cache, check if it's still valid
-            return file_hash
+    def write(self, message: str):
+        with self._lock:
+            if self._file:
+                self._file.write(message)
+                self._file.flush()
 
-        # path not in cache or cache entry is invalid
-        hasher = hashlib.md5()
-        with open(path, "rb") as f:
-            while chunk := f.read(128 * hasher.block_size):
-                hasher.update(chunk)
-
-        file_hash = hasher.hexdigest()
-
-        watched_dir[path.name] = file_hash
-        if path.parent not in self._watched_dirs:
-            self._start_watching(path.parent)
-        self._watched_dirs[path.parent] = watched_dir
-
-        return file_hash
-
-    def _start_watching(self, directory: Path):
-        handler = pyuv.fs.FSEvent(self._loop)  # type: ignore
-        handler.start(str(directory), 0, self._on_path_change)
-        self._handlers.append(handler)
-
-    def _on_path_change(self, handler, filename, events, error):
-        directory = Path(handler.path)
-        watched_dir = self._watched_dirs.get(directory, {})
-        if filename in watched_dir:
-            del watched_dir[filename]
-
-            if not watched_dir:
-                handler.stop()
-                self._handlers.remove(handler)
-                del self._watched_dirs[directory]
+    def close(self):
+        with self._lock:
+            if self._file:
+                self._file.close()
+                self._file = None
 
     def __del__(self):
-        for ev in self._handlers:
-            ev.stop()
+        self.close()
 
 
 class Connection:
     def __init__(self,
                  pipe: pyuv.Pipe,  # type: ignore
-                 cache: HashCache,
+                 sink: LogSink,
                  on_close_callback: Callable):
         self._read_buf: bytes = b''
         self._pipe = pipe
-        self._cache = cache
+        self._sink = sink
         self._on_close_callback = on_close_callback
         pipe.start_read(self._on_client_read)
 
     def _on_client_read(self, pipe: pyuv.Pipe, data: bytes, error):  # type: ignore
         self._read_buf += data
         if self._read_buf.endswith(b'\x00'):
-            paths = map(Path, self._read_buf[:-1].decode('utf-8').splitlines())
-            try:
-                hashes = map(self._cache.get_file_hash, paths)
-                response = '\n'.join(hashes).encode('utf-8')
-            except OSError as e:
-                response = b'!' + pickle.dumps(e)
-            pipe.write(response + b'\x00', self._on_write_done)
+            self._sink.write(self._read_buf[:-1].decode('utf-8'))
 
     def _on_write_done(self, pipe, error):
-        logging.debug("sent response to client, closing connection")
         self._pipe.close()
         self._on_close_callback(self)
 
 
-class PipeServer:
-    def __init__(self, timeout_s: int = 180):
+class LoggerServer:
+    def __init__(self, log_file: Path, timeout_s: int = 180):
         self._event_loop = None
         self._timer = None
+        self._log_file = log_file
         self._timeout = timeout_s
         self._pipe_server = None
         self._connections = []
-        self._cache = None
+        self._sink = None
 
     def run(self) -> int:
         # ensure only one instance of clcache server is running
@@ -126,7 +94,7 @@ class PipeServer:
                 return 0
 
             self._event_loop = pyuv.Loop.default_loop()  # type: ignore
-            self._cache = HashCache(self._event_loop)
+            self._sink = LogSink(self._log_file)
             self._timer = pyuv.Timer(self._event_loop)  # type: ignore
             self._pipe_server = pyuv.Pipe(self._event_loop)  # type: ignore
             self._pipe_server.bind(PIPE_NAME)
@@ -135,7 +103,7 @@ class PipeServer:
             try:
                 signal_handle = pyuv.Signal(  # type: ignore
                     self._event_loop)
-                signal_handle.start(PipeServer._on_sigterm, signal.SIGTERM)
+                signal_handle.start(LoggerServer._on_sigterm, signal.SIGTERM)
 
                 # start listening for connections, but stop event loop if idle
                 # create a timer to stop the event loop if idle
@@ -164,17 +132,12 @@ class PipeServer:
                 windll.kernel32.CloseHandle(event)
 
     @staticmethod
-    def get_file_hashes(path_list: List[Path]) -> List[str]:
-        """Get file hashes from clcache server."""
+    def log_message(message: str):
         while True:
             try:
                 with open(PIPE_NAME, "w+b") as f:
-                    f.write("\n".join(map(str, path_list)).encode("utf-8"))
+                    f.write(f"{message}\n".encode("utf-8"))
                     f.write(b"\x00")
-                    response = f.read()
-                    if response.startswith(b"!"):
-                        raise pickle.loads(response[1:-1])
-                    return response[:-1].decode("utf-8").splitlines()
             except OSError as e:
                 if (
                     e.errno == errno.EINVAL
@@ -184,7 +147,7 @@ class PipeServer:
                     windll.kernel32.WaitNamedPipeW(
                         PIPE_NAME, NMPWAIT_WAIT_FOREVER)
                 else:
-                    raise
+                    break # pipe not available, ignore
 
     @staticmethod
     def _signal_server_ready():
@@ -197,7 +160,7 @@ class PipeServer:
 
     def _on_connection(self, pipe, error):
         assert self._timer is not None
-        assert self._cache is not None
+        assert self._sink is not None
 
         # reset timer
         self._timer.again()
@@ -206,7 +169,7 @@ class PipeServer:
         client = pyuv.Pipe(self._pipe_server.loop)  # type: ignore
         pipe.accept(client)
         self._connections.append(Connection(
-            client, self._cache, self._connections.remove))
+            client, self._sink, self._connections.remove))
 
     @staticmethod
     def _on_sigterm(handle, signum):
@@ -214,18 +177,18 @@ class PipeServer:
             h.close()
 
 
-def spawn_server(server_idle_timeout_s: int, wait_time_s: int = 10):
+def spawn_server(log_path: Path, wait_time_s: int = 10):
     # sourcery skip: extract-method
 
     # if the server is already running, return immediately
-    if PipeServer.is_running():
+    if LoggerServer.is_running():
         return True
 
     # avoid dobule spawning
     with NamedMutex(LAUNCH_MUTEX):
 
         # if the server is already running, return immediately
-        if PipeServer.is_running():
+        if LoggerServer.is_running():
             return True
 
         with ReadyEvent(PIPE_READY_EVENT) as ready_event:
@@ -235,7 +198,7 @@ def spawn_server(server_idle_timeout_s: int, wait_time_s: int = 10):
             args.extend(
                 (
                     Path(sys.argv[0]).absolute(),
-                    f"--run-server={server_idle_timeout_s}",
+                    f"--run-logger=\"{log_path}\"",
                 )
             )
 
@@ -243,8 +206,7 @@ def spawn_server(server_idle_timeout_s: int, wait_time_s: int = 10):
                 args, creationflags=sp.CREATE_NEW_PROCESS_GROUP | sp.CREATE_NO_WINDOW)
             success = p.pid != 0 and ready_event.wait(wait_time_s*1000)
             if success:
-                log(
-                    f"Started hash server with timeout {server_idle_timeout_s} seconds")
+                trace("Started logger server")
             else:
-                log("Failed to start hash server", level = LogLevel.WARN)
+                trace("Failed to start logger server")
             return success

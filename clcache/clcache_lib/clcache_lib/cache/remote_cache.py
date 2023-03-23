@@ -13,7 +13,6 @@ from couchbase.options import (ClusterOptions, ClusterTimeoutOptions,
 from ..cache.stats import MissReason
 from ..config import (COUCHBASE_CONNECT_TIMEOUT, COUCHBASE_EXPIRATION,
                       COUCHBASE_GET_TIMEOUT)
-from ..utils.util import trace
 from .couchbase_ex import RawBinaryTranscoderEx
 from .file_cache import *
 
@@ -189,7 +188,8 @@ class CacheCouchbaseStrategy:
             with open(artifacts.obj_file_path, "rb") as obj_file:
                 return self._setEntryFromFile(obj_file, key, artifacts)
         except Exception:
-            trace(f"Could not set {key} in Couchbase {self.url}")
+            log(f"Could not set {key} in Couchbase {self.url}",
+                level=LogLevel.WARN)
             return 0
 
     def _setEntryFromFile(self, obj_file, key: str, artifacts: CompilerArtifacts) -> int:
@@ -250,7 +250,8 @@ class CacheCouchbaseStrategy:
                     coll_manifests.upsert(key, json_object)
                     coll_manifests.touch(key, COUCHBASE_EXPIRATION)
             except Exception:
-                trace(f"Could not set {key} in Couchbase {self.url}")
+                log(f"Could not set {key} in Couchbase {self.url}",
+                    level=LogLevel.WARN)
 
     def get_manifest(self, key: str) -> Optional[Manifest]:
         if self.is_bad:
@@ -306,11 +307,11 @@ class CacheFileWithCouchbaseFallbackStrategy:
         If the entry is in the remote cache, it will be copied into the local cache.
         '''
         if self.local_cache.has_entry(key):
-            trace(f"Getting object {key} from local cache")
+            log(f"Getting object {key} from local cache")
             return self.local_cache.get_entry(key)
 
         if payload := self.remote_cache.getEntryAsPayload(key):
-            trace(f"{self} remote cache hit for {key} dumping into local cache")
+            log(f"{self} remote cache hit for {key} dumping into local cache")
             size = self.local_cache.set_entry_from_payload(key, payload)
 
             # record the hit, and size of the object in the stats
@@ -352,7 +353,7 @@ class CacheFileWithCouchbaseFallbackStrategy:
         If the manifest is in the remote cache, it will be copied into the local cache.
         '''
         if local := self.local_cache.get_manifest(manifest_hash):
-            trace(f"{self} local manifest hit for {manifest_hash}")
+            log(f"{self} local manifest hit for {manifest_hash}")
             return local
 
         if remote := self.remote_cache.get_manifest(manifest_hash):
@@ -362,7 +363,7 @@ class CacheFileWithCouchbaseFallbackStrategy:
                 # record the size of the manifest in the stats
                 self.local_cache.current_stats.register_cache_entry_size(size)
 
-            trace(
+            log(
                 f"{self} remote manifest hit for {manifest_hash} writing into local cache"
             )
             return remote, size

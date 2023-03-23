@@ -4,7 +4,7 @@ ERROR_SUCCESS = 0
 ERROR_ALREADY_EXISTS = 0xB7
 
 
-class AppSingleton():
+class AppSingleton:
     """Singleton for controlling application instances."""
 
     def __init__(self, name: str):

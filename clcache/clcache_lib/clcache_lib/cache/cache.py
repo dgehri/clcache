@@ -1,25 +1,26 @@
 import contextlib
 import os
 from pathlib import Path
-from typing import Callable, Optional, Tuple
+from typing import Callable, Optional
+
+from clcache_lib.utils.logging import LogLevel, log
 
 from ..config.config import VERSION
-
-from .stats import CacheStats, MissReason, PersistentStats, Stats
-from ..utils.util import trace
 from .file_cache import CacheFileStrategy, CompilerArtifacts
+from .stats import CacheStats, MissReason, PersistentStats, Stats
 
 
 class Cache:
     def __init__(self, cache_dir: Optional[Path] = None):
         if url := os.environ.get("CLCACHE_COUCHBASE"):
             try:
-                from .remote_cache import CacheFileWithCouchbaseFallbackStrategy
+                from .remote_cache import \
+                    CacheFileWithCouchbaseFallbackStrategy
                 self.strategy = CacheFileWithCouchbaseFallbackStrategy(
                     url, cache_dir=cache_dir)
                 return
             except Exception as e:
-                trace(f"Failed to initialize Couchbase cache using {url}")
+                log(f"Failed to initialize Couchbase cache using {url}", LogLevel.WARN)
 
         self.strategy = CacheFileStrategy(cache_dir=cache_dir)
 

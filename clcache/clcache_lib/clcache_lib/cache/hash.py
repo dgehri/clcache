@@ -1,24 +1,17 @@
-import errno
 import functools
 import hashlib
 import os
-import pickle
-from ctypes import windll, wintypes
 from pathlib import Path
+import traceback
 from typing import List, Optional
 
-from ..cache.server import PIPE_NAME, spawn_server
+from ..cache.server import PipeServer, spawn_server
 from ..config import CACHE_VERSION
 from ..config.config import HASH_SERVER_TIMEOUT
-from ..utils.util import trace
+from ..utils.logging import LogLevel, log
 from .virt import is_in_build_dir, subst_basedir_with_placeholder
 
 HashAlgorithm = hashlib.md5
-BUFFER_SIZE = 65536
-
-# Define some Win32 API constants here to avoid dependency on win32pipe
-NMPWAIT_WAIT_FOREVER = wintypes.DWORD(0xFFFFFFFF)
-ERROR_PIPE_BUSY = 231
 
 
 def get_compiler_hash(compiler_path: Path) -> str:
@@ -73,27 +66,9 @@ def get_file_hashes(path_list: List[Path]) -> List[str]:
             if not spawn_server(server_timeout_secs):
                 raise OSError("Server didn't start in time")
 
-            while True:
-                try:
-                    with open(PIPE_NAME, "w+b") as f:
-                        f.write("\n".join(map(str, path_list)).encode("utf-8"))
-                        f.write(b"\x00")
-                        response = f.read()
-                        if response.startswith(b"!"):
-                            raise pickle.loads(response[1:-1])
-                        return response[:-1].decode("utf-8").splitlines()
-                except OSError as e:
-                    if (
-                        e.errno == errno.EINVAL
-                        and windll.kernel32.GetLastError() == ERROR_PIPE_BUSY
-                    ):
-                        # All pipe instances are busy, wait until available
-                        windll.kernel32.WaitNamedPipeW(
-                            PIPE_NAME, NMPWAIT_WAIT_FOREVER)
-                    else:
-                        raise
+            return PipeServer.get_file_hashes(path_list)
         except Exception as e:
-            trace(f"Failed to use server: {e}", 1)
+            log(f"Failed to use server: {traceback.format_exc()}", LogLevel.ERROR)
 
     return [get_file_hash(path) for path in path_list]
 
@@ -126,14 +101,14 @@ def get_file_hash(path: Path, toolset_data: Optional[str] = None) -> str:
             src_content = subst_basedir_with_placeholder(f.read(),  src_dir)
             hasher.update(src_content)
 
-    trace(f"File hash: {path} => {hasher.hexdigest()}", 2)
+    # log(f"File hash: {path.as_posix()} => {hasher.hexdigest()}", 2)
 
     if toolset_data is not None:
         # Encoding of this additional data does not really matter
         # as long as we keep it fixed, otherwise hashes change.
         # The string should fit into ASCII, so UTF8 should not change anything
         hasher.update(toolset_data.encode("UTF-8"))
-        trace(f"AdditionalData Hash: {hasher.hexdigest()}: {toolset_data}", 2)
+        # log(f"AdditionalData Hash: {hasher.hexdigest()}: {toolset_data}", 2)
 
     return hasher.hexdigest()
 

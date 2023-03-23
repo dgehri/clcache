@@ -8,12 +8,12 @@ clcache_lib.egg-info/dependency_links.txt
 clcache_lib.egg-info/top_level.txt
 clcache_lib/cache/__init__.py
 clcache_lib/cache/cache.py
-clcache_lib/cache/cache_lock.py
 clcache_lib/cache/config.py
 clcache_lib/cache/couchbase_ex.py
 clcache_lib/cache/ex.py
 clcache_lib/cache/file_cache.py
 clcache_lib/cache/hash.py
+clcache_lib/cache/logger.py
 clcache_lib/cache/manifest_entry.py
 clcache_lib/cache/persistent_json_dict.py
 clcache_lib/cache/remote_cache.py
@@ -30,6 +30,8 @@ clcache_lib/utils/__init__.py
 clcache_lib/utils/app_singleton.py
 clcache_lib/utils/args.py
 clcache_lib/utils/errors.py
+clcache_lib/utils/file_lock.py
+clcache_lib/utils/logging.py
 clcache_lib/utils/named_mutex.py
 clcache_lib/utils/ready_event.py
 clcache_lib/utils/util.py

@@ -2,12 +2,15 @@ import contextlib
 import json
 import os
 import time
+from shutil import copyfile, copyfileobj
 from typing import List, NamedTuple, Tuple
 
+import lz4.frame
 from atomicwrites import atomic_write
 
+from ..utils.file_lock import FileLock
+from ..utils.logging import LogLevel, log
 from ..utils.util import *
-from .cache_lock import CacheLock
 from .config import Configuration
 from .ex import *
 from .hash import *
@@ -55,7 +58,8 @@ class Manifest:
     def add_entry(self, entry: ManifestEntry):
         """Adds entry at the top of the entries"""
         # Remove existing entry with the same includeHash
-        self._entries = [e for e in self._entries if e.includesContentHash != entry.includesContentHash]
+        self._entries = [
+            e for e in self._entries if e.includesContentHash != entry.includesContentHash]
         self._entries.insert(0, entry)
 
     def touch_entry(self, obj_hash: str):
@@ -70,7 +74,7 @@ class Manifest:
 class ManifestSection:
     def __init__(self, manifest_section_dir: Path):
         self.manifestSectionDir: Path = manifest_section_dir
-        self.lock = CacheLock.for_path(self.manifestSectionDir)
+        self.lock = FileLock.for_path(self.manifestSectionDir)
 
     def manifest_path(self, manifest_hash: str) -> Path:
         return self.manifestSectionDir / f"{manifest_hash}.json"
@@ -81,8 +85,8 @@ class ManifestSection:
     def set_manifest(self, manifest_hash: str, manifest: Manifest) -> int:
         '''Writes manifest to disk and returns the size of the manifest file'''
         manifest_path = self.manifest_path(manifest_hash)
-        trace(
-            f"Writing manifest with manifest_hash = {manifest_hash} to {manifest_path}")
+        log(
+            f"Writing manifest with manifest_hash = {manifest_hash} to {manifest_path.as_posix()}")
         ensure_dir_exists(self.manifestSectionDir)
 
         # Retry writing manifest file in case of concurrent
@@ -98,8 +102,8 @@ class ManifestSection:
                 # Return the size of the manifest file (warning: don't move inside the with block!)
                 return manifest_path.stat().st_size
             except Exception as e:
-                trace(
-                    f"Failed to write manifest file {manifest_path}: {e} (retrying)")
+                log(
+                    f"Failed to write manifest file {manifest_path.as_posix()}: {traceback.format_exc()} (retrying)")
                 if i == 9:
                     raise
                 time.sleep(0.5)
@@ -132,7 +136,8 @@ class ManifestSection:
         except IOError:
             return None
         except (ValueError, KeyError):
-            error(f"clcache: manifest file {manifest_file} was broken")
+            log(
+                f"Manifest file {manifest_file.as_posix()} was broken", LogLevel.ERROR)
             return None
 
 
@@ -211,7 +216,7 @@ class CompilerArtifactsSection:
 
     def __init__(self, compiler_artifacts_section_dir: Path):
         self.compilerArtifactsSectionDir: Path = compiler_artifacts_section_dir
-        self.lock = CacheLock.for_path(self.compilerArtifactsSectionDir)
+        self.lock = FileLock.for_path(self.compilerArtifactsSectionDir)
 
     def cache_entry_dir(self, key: str) -> Path:
         '''Returns the path to the cache entry directory for the given key.'''
@@ -267,7 +272,7 @@ class CompilerArtifactsSection:
             # Write the object file to file
             if artifacts.obj_file_path is not None:
                 dst_file_path = temp_entry_dir / CompilerArtifactsSection.OBJECT_FILE
-                size = copy_to_cache(artifacts.obj_file_path, dst_file_path)
+                size = _copy_to_cache(artifacts.obj_file_path, dst_file_path)
 
             # Write the stdout to file
             self._write_to_cache(
@@ -469,7 +474,8 @@ class CacheFileStrategy:
         self.persistent_stats.save_combined(self.current_stats)
 
         # also save the current stats to the build directory
-        build_stats = PersistentStats(Path(BUILDDIR_STR) / "clcache.json")
+        build_stats = PersistentStats(
+            Path(BUILDDIR_STR) / f"{get_program_name()}.json")
         build_stats.save_combined(self.current_stats)
 
     @property
@@ -485,9 +491,10 @@ class CacheFileStrategy:
         return self.compiler_artifacts_repository.section(key).lock
 
     def __str__(self):
-        return f"disk cache at {self.dir}"
+        assert self.dir is not None
+        return f"disk cache at {self.dir.as_posix()}"
 
-    def manifest_lock_for(self, key: str) -> CacheLock:
+    def manifest_lock_for(self, key: str) -> FileLock:
         '''Get the lock for the given key or raise a KeyError if the entry does not exist.'''
         return self.manifests_repository.section(key).lock
 
@@ -557,3 +564,48 @@ class CacheFileStrategy:
             new_size + new_manif_size, new_count)
         self.current_stats.clear_cache_size()
         self.current_stats.clear_cache_entries()
+
+
+def _copy_to_cache(src_file_path: Path, dst_file_path: Path) -> int:
+    '''
+    Copy a file to the cache.
+
+    Parameters:
+        src_file_path: Path to the source file.
+        dst_file_path: Path to the destination file.
+
+    Returns:
+        The size of the file in bytes, after compression.
+    '''
+    ensure_dir_exists(dst_file_path.parent)
+
+    temp_dst: Path = dst_file_path.parent / f"{dst_file_path.name}.tmp"
+    dst_file_path = dst_file_path.parent / f"{dst_file_path.name}.lz4"
+    with open(src_file_path, "rb") as file_in:
+        with lz4.frame.open(temp_dst, mode="wb") as file_out:
+            copyfileobj(file_in, file_out)  # type: ignore
+
+    temp_dst.replace(dst_file_path)
+    return dst_file_path.stat().st_size
+
+
+def copy_from_cache(src_file: Path, dst_file: Path):
+    '''
+    Copy a file from the cache.
+
+    Parameters:
+        src_file_path: Path to the source file.
+        dst_file_path: Path to the destination file.
+    '''
+    ensure_dir_exists(dst_file.absolute().parent)
+
+    temp_dst: Path = dst_file.parent / f"{dst_file.name}.tmp"
+
+    if os.path.exists(f"{src_file}.lz4"):
+        with lz4.frame.open(f"{src_file}.lz4", mode="rb") as file_in:
+            with open(temp_dst, "wb") as file_out:
+                copyfileobj(file_in, file_out)  # type: ignore
+    else:
+        copyfile(src_file, temp_dst)
+
+    temp_dst.replace(dst_file)
