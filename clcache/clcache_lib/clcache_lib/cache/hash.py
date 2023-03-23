@@ -8,7 +8,6 @@ from typing import List, Optional
 from ..cache.server import PipeServer, spawn_server
 from ..config import CACHE_VERSION
 from ..config.config import HASH_SERVER_TIMEOUT
-from ..utils.file_lock import FileLock
 from ..utils.logging import LogLevel, log
 from .virt import is_in_build_dir, subst_basedir_with_placeholder
 
@@ -89,21 +88,20 @@ def get_file_hash(path: Path, toolset_data: Optional[str] = None) -> str:
 
     hasher = HashAlgorithm()
 
-    with FileLock.for_path(path):
-        with open(path, "rb") as f:
-            if not is_in_build_dir(path):
-                while chunk := f.read(128 * hasher.block_size):
-                    hasher.update(chunk)
-            else:
-                # If the file is in the build directory, it may contain references
-                # (includes, comments) to the files in the base (source) directory.
-                # We need to replace those references with a placeholder to make the
-                # hash independent of that information.
-                src_dir = path.parent  # get containing folder of path
-                src_content = subst_basedir_with_placeholder(f.read(),  src_dir)
-                hasher.update(src_content)
+    with open(path, "rb") as f:
+        if not is_in_build_dir(path):
+            while chunk := f.read(128 * hasher.block_size):
+                hasher.update(chunk)
+        else:
+            # If the file is in the build directory, it may contain references
+            # (includes, comments) to the files in the base (source) directory.
+            # We need to replace those references with a placeholder to make the
+            # hash independent of that information.
+            src_dir = path.parent  # get containing folder of path
+            src_content = subst_basedir_with_placeholder(f.read(),  src_dir)
+            hasher.update(src_content)
 
-    # log(f"File hash: {path} => {hasher.hexdigest()}", 2)
+    # log(f"File hash: {path.as_posix()} => {hasher.hexdigest()}", 2)
 
     if toolset_data is not None:
         # Encoding of this additional data does not really matter

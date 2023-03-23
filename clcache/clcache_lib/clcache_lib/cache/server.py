@@ -12,7 +12,6 @@ from typing import Callable, List
 import pyuv
 
 from ..utils.app_singleton import AppSingleton
-from ..utils.file_lock import FileLock
 from ..utils.logging import LogLevel, log
 from ..utils.named_mutex import NamedMutex
 from ..utils.ready_event import ReadyEvent
@@ -47,10 +46,9 @@ class HashCache:
 
         # path not in cache or cache entry is invalid
         hasher = hashlib.md5()
-        with FileLock.for_path(path):
-            with open(path, "rb") as f:
-                while chunk := f.read(128 * hasher.block_size):
-                    hasher.update(chunk)
+        with open(path, "rb") as f:
+            while chunk := f.read(128 * hasher.block_size):
+                hasher.update(chunk)
 
         file_hash = hasher.hexdigest()
 
