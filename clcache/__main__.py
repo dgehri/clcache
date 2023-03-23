@@ -16,6 +16,7 @@ from typing import List, Optional, Tuple
 
 from clcache_lib.cache.ex import LogicException
 from clcache_lib.config import VERSION
+from clcache_lib.utils.file_lock import FileLock
 from clcache_lib.utils.logging import LogLevel, flush_logger, init_logger, log
 from clcache_lib.utils.util import get_build_dir
 
@@ -195,12 +196,14 @@ def _get_compiler_path() -> Tuple[Path, ModuleType, List[str]]:
             # Locate "moccache.json" in current directory and parent directories, next to "CMakeCache.txt"
             for path in [Path.cwd()] + list(Path.cwd().parents):
                 if (path / "CMakeCache.txt").exists():
-                    if (path / "moccache.json").exists():
+                    moccache_json = path / "moccache.json"
+                    if (moccache_json).exists():
                         # read compiler path from moccache.json
                         import json
-                        with open(path / "moccache.json", "r") as f:
-                            config = json.load(f)
-                            compiler_path = Path(config["moc_path"])
+                        with FileLock.for_path(moccache_json):
+                            with open(moccache_json, "r") as f:
+                                config = json.load(f)
+                                compiler_path = Path(config["moc_path"])
                     break
                 path = path.parent
 

@@ -1,23 +1,21 @@
 # We often don't use all members of all the pyuv callbacks
-# pylint: disable=unused-argument
 import errno
 import hashlib
-import logging
 import pickle
 import signal
 import subprocess as sp
 import sys
+import threading
 from ctypes import windll, wintypes
 from pathlib import Path
-import threading
 from typing import Callable
 
 import pyuv
 
 from ..utils.app_singleton import AppSingleton
+from ..utils.logging import log, LogLevel
 from ..utils.named_mutex import NamedMutex
 from ..utils.ready_event import ReadyEvent
-from ..utils.util import trace
 
 # Not the same as VERSION !
 SERVER_VERSION = "1"
@@ -58,7 +56,7 @@ class LogSink:
 
 class Connection:
     def __init__(self,
-                 pipe: pyuv.Pipe,  # type: ignore
+                 pipe: pyuv.Pipe, # type: ignore
                  sink: LogSink,
                  on_close_callback: Callable):
         self._read_buf: bytes = b''
@@ -206,7 +204,7 @@ def spawn_server(log_path: Path, wait_time_s: int = 10):
                 args, creationflags=sp.CREATE_NEW_PROCESS_GROUP | sp.CREATE_NO_WINDOW)
             success = p.pid != 0 and ready_event.wait(wait_time_s*1000)
             if success:
-                trace("Started logger server")
+                log("Started logger server")
             else:
-                trace("Failed to start logger server")
+                log("Failed to start logger server", level=LogLevel.ERROR)
             return success

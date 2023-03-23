@@ -8,6 +8,7 @@ from typing import List, Optional
 
 from ..utils import (get_long_path_name, get_short_path_name, line_iter,
                      line_iter_b, normalize_dir, resolve)
+from ..utils.file_lock import FileLock
 from ..utils.util import get_build_dir
 from .ex import LogicException
 
@@ -261,18 +262,19 @@ def _get_base_dir(build_dir: Path) -> Optional[Path]:
     if not cmake_cache_txt.exists():
         return None
 
-    with open(cmake_cache_txt) as f:
-        for line in f:
-            line = line.strip()
-            if line.startswith("#") or line.startswith("\n"):
-                continue
+    with FileLock.for_path(cmake_cache_txt):
+        with open(cmake_cache_txt, "r") as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith("#") or line.startswith("\n"):
+                    continue
 
-            name_and_type, value = line.partition("=")[::2]
-            name, _ = name_and_type.partition(":")[::2]
-            if name == "CMAKE_HOME_DIRECTORY":
-                path = Path(value)
-                if path.exists():
-                    return normalize_dir(path)
+                name_and_type, value = line.partition("=")[::2]
+                name, _ = name_and_type.partition(":")[::2]
+                if name == "CMAKE_HOME_DIRECTORY":
+                    path = Path(value)
+                    if path.exists():
+                        return normalize_dir(path)
 
 
 # This is the build dir, where the compiler is executed

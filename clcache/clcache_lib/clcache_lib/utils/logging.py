@@ -1,6 +1,7 @@
 import datetime
 import enum
 import multiprocessing
+import sys
 import threading
 import weakref
 from pathlib import Path
@@ -39,7 +40,12 @@ class MessageBuffer:
                             f.write(f"{message}\n")
                 self._messages.clear()
         except Exception:
-            pass
+            try:
+                # Failed, try printing to console
+                for message in self._messages:
+                    print(message, file=sys.stderr)
+            except Exception:
+                pass
 
 
 def init_logger(log_dir: Path):
@@ -47,6 +53,9 @@ def init_logger(log_dir: Path):
         log.program_name = get_program_name()
         log_file = log_dir / f"{log.program_name }.log"
         log.messages = MessageBuffer(log_file)
+        
+        # Immediately log command line arguments
+        log(f"Command line: {' '.join(sys.argv[:])}")
 
 
 def flush_logger():
