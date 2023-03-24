@@ -61,7 +61,7 @@ def canonicalize_compile_output(compiler_output: str, stream: StdStream) -> str:
     return "\r\n".join(lines)
 
 
-def _path_starts_with(path: str, placeholder: str) -> bool:
+def _path_starts_with_placeholder(path: str, placeholder: str) -> bool:
     """Check if a path starts with a placeholder."""
     if not path.startswith(placeholder):
         return False
@@ -82,18 +82,19 @@ def expand_path(path: str) -> Path:
             raise LogicException(
                 f"No CLCACHE_BASEDIR set, but found relative path {path}"
             )
-    elif _path_starts_with(path, BUILDDIR_REPLACEMENT):
+    elif _path_starts_with_placeholder(path, BUILDDIR_REPLACEMENT):
         return Path(path.replace(BUILDDIR_REPLACEMENT, str(BUILDDIR_STR), 1))
-    elif CONAN_USER_HOME and _path_starts_with(path, CONANDIR_REPLACEMENT):
+    elif CONAN_USER_HOME and _path_starts_with_placeholder(path, CONANDIR_REPLACEMENT):
         return _expand_conan_placeholder(CONAN_USER_HOME, path)
-    elif QT_DIR_STR and _path_starts_with(path, QTDIR_REPLACEMENT):
+    elif QT_DIR_STR and _path_starts_with_placeholder(path, QTDIR_REPLACEMENT):
         return Path(path.replace(QTDIR_REPLACEMENT, QT_DIR_STR, 1))
-    elif LLVM_DIR_STR and _path_starts_with(path, LLVM_REPLACEMENT):
+    elif LLVM_DIR_STR and _path_starts_with_placeholder(path, LLVM_REPLACEMENT):
         return Path(path.replace(LLVM_REPLACEMENT, LLVM_DIR_STR, 1))
     elif m := RE_ENV.match(path):
-        paceholder = m.group(1)
-        if _path_starts_with(path, paceholder):
-            if real_path := _get_env_path(paceholder):
+        paceholder = m.group(0)
+        var_name = m.group(1)
+        if _path_starts_with_placeholder(path, paceholder):
+            if real_path := _get_env_path(var_name):
                 return real_path / path[m.end(0)+1:]
             else:
                 raise LogicException(
@@ -294,7 +295,6 @@ def _get_base_dir(build_dir: Path) -> Optional[Path]:
                         return normalize_dir(path)
 
     result = impl()
-    log(f"<BASEDIR> = {result}")
     return result
 
 

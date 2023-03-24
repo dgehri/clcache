@@ -68,15 +68,18 @@ def invoke_real_compiler(compiler_path: Path,
     # iterate over stdout and collapse all <folder>/.. and <folder>\. to nothing
     regex = re.compile(r'^(\w+): ([ \w]+):( +)(?P<file_path>\S.*)$')
 
+    MAX_PATH = 260 - 10  # 10 chars for some margin
     lines = []
     for line in line_iter(stdout):
         if m := regex.match(line):
             file_path = m['file_path']
-            sanitized_path = os.path.normpath(file_path)
-            lines.append(
-                f"{m[1]}: {m[2]}:{m[3]}{sanitized_path}")
-        else:
-            lines.append(line)
+            if len(file_path) > MAX_PATH:
+                sanitized_path = os.path.normpath(file_path)
+                lines.append(
+                    f"{m[1]}: {m[2]}:{m[3]}{sanitized_path}")
+                continue
+
+        lines.append(line)
 
     lines.append("")
 

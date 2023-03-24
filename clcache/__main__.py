@@ -262,7 +262,6 @@ if __name__ == "__main__":
         # initialize logger if environment variable is set
         if "CLCACHE_LOGGING" in os.environ:
             init_logger(build_dir)
-            log(f"<BUILDDIR> = {build_dir}")
             
         sys.exit(main())
     except Exception as e:

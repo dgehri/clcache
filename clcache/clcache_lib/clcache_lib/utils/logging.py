@@ -53,9 +53,6 @@ def init_logger(log_dir: Path):
         log_file = log_dir / f"{log.program_name }.log"
         log.messages = MessageBuffer(log_file)
 
-        # Immediately log command line arguments
-        log(f"Command line: {' '.join(sys.argv[:])}")
-
 
 def flush_logger():
     if log.messages:
