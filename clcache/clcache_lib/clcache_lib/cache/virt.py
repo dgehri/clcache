@@ -8,7 +8,7 @@ from typing import List, Optional
 
 from ..utils import (get_long_path_name, get_short_path_name, line_iter,
                      line_iter_b, normalize_dir, resolve)
-from ..utils.logging import log
+from ..utils.logging import LogLevel, log
 from ..utils.util import get_build_dir
 from .ex import LogicException
 
@@ -101,7 +101,7 @@ def expand_path(path: str) -> Path:
                     f"Unable to resolve environment variable {paceholder}"
                 )
         else:
-            assert(False)
+            assert (False)
     else:
         return Path(path)
 
@@ -119,8 +119,13 @@ def canonicalize_path(path: Path) -> str:
         or _canonicalize_qt_dir(path_str)
         or _canonicalize_llvm_dir(path_str)
         or _canonicalize_toolchain_dirs(path_str)
-        or path_str
+        or _canonicalization_failed(path_str)
     )
+
+
+def _canonicalization_failed(path_str: str) -> str:
+    log(f"Unable to canonicalize path: {path_str}", LogLevel.WARN)
+    return path_str
 
 
 def subst_basedir_with_placeholder(src_code: bytes, src_dir: Path) -> bytes:

@@ -1,9 +1,13 @@
+import datetime
 from ctypes import windll, wintypes
 from pathlib import Path
+
+from ..utils.logging import LogLevel, log
 
 
 class FileLockException(Exception):
     pass
+
 
 class FileLock:
     """Implements a lock for the object cache which
@@ -17,7 +21,7 @@ class FileLock:
         self._mutex_name = "Local\\" + mutex_name
         self._mutex = None
         self._timeout_ms = timeout_ms
-        # self._t0 = None
+        self._t0 = None
 
     def create_mutex(self):
         self._mutex = windll.kernel32.CreateMutexW(
@@ -36,8 +40,7 @@ class FileLock:
             windll.kernel32.CloseHandle(self._mutex)
 
     def acquire(self):
-        # trace(f"Acquiring lock {self._mutexName}...", 0)
-        # self._t0 = datetime.datetime.now()
+        self._t0 = datetime.datetime.now()
         if not self._mutex:
             self.create_mutex()
         result = windll.kernel32.WaitForSingleObject(
@@ -51,17 +54,26 @@ class FileLock:
                 error_string = "Error! WaitForSingleObject returns {result}, last error {error}".format(
                     result=result, error=windll.kernel32.GetLastError()
                 )
-            # trace(errorString, 0)                
+            log(error_string, LogLevel.ERROR)
             raise FileLockException(error_string)
-        
-        # elapsed = (datetime.datetime.now() - self._t0).total_seconds()
-        # trace(f"Acquired lock {self._mutexName} after {elapsed:.3f} s", 0)
+
+        elapsed = (datetime.datetime.now() - self._t0).total_seconds()
+        if elapsed > 1:
+            log(
+                f"Waited for lock {self._mutex_name} during {elapsed:.3f} s",
+                LogLevel.WARN,
+            )
 
     def release(self):
         windll.kernel32.ReleaseMutex(self._mutex)
-        # elapsed = (datetime.datetime.now() - self._t0).total_seconds()
-        # trace(f"Released lock {self._mutexName} after {elapsed:.3f} s", 0)
-        
+        if self._t0:
+            elapsed = (datetime.datetime.now() - self._t0).total_seconds()
+            if elapsed > 1:
+                log(
+                    f"Held lock for {self._mutex_name} during {elapsed:.3f} s",
+                    LogLevel.WARN,
+                )
+
     @staticmethod
     def for_path(path: Path):
         timeout_ms = 10 * 1000
