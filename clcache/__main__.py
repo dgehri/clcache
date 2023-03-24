@@ -11,13 +11,11 @@ import os
 import sys
 from pathlib import Path
 from shutil import which
-import time
 from types import ModuleType
 from typing import List, Optional, Tuple
 
 from clcache_lib.cache.ex import LogicException
 from clcache_lib.config import VERSION
-from clcache_lib.utils.file_lock import FileLock
 from clcache_lib.utils.logging import LogLevel, flush_logger, init_logger, log
 from clcache_lib.utils.util import get_build_dir
 
@@ -92,6 +90,10 @@ def _parse_args() -> Optional[argparse.Namespace]:
         nargs=argparse.REMAINDER,
         help="Optional arguments for the compiler executable."
     )
+    
+    if len(sys.argv) == 1:
+        parser.print_help()
+        sys.exit(0)
 
     options, remainder = parser.parse_known_args(sys.argv[1:3])
     remainder.extend(options.args)

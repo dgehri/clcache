@@ -33,7 +33,7 @@ def expand_compile_output(compiler_output: str, stream: StdStream) -> str:
     """Expand the canonicalized paths in the compiler output."""
     regex = RE_STDOUT if stream == StdStream.STDOUT else RE_STDERR
     lines = []
-    for line in line_iter(compiler_output, strip=True):
+    for line in line_iter(compiler_output):
         if match := regex.match(line):
             file_path = expand_path(match[2])
             line = f"{match[1]}{file_path}{line[match.end(2):]}"
@@ -48,7 +48,7 @@ def canonicalize_compile_output(compiler_output: str, stream: StdStream) -> str:
     """Canonicalize the paths in the compiler output."""
     regex = RE_STDOUT if stream == StdStream.STDOUT else RE_STDERR
     lines = []
-    for line in line_iter(compiler_output, strip=True):
+    for line in line_iter(compiler_output):
         if match := regex.match(line):
             orig_path = Path(os.path.normpath(match[2])).absolute()
             # Canonicalize the path
@@ -148,7 +148,7 @@ def subst_basedir_with_placeholder(src_code: bytes, src_dir: Path) -> bytes:
 
     # iterate over src_code line by line
     line: bytes
-    for line in line_iter_b(src_code, strip=True):
+    for line in line_iter_b(src_code):
         with contextlib.suppress(UnicodeDecodeError, ValueError):
             include_path: Optional[Path] = None
             if m := subst_basedir_with_placeholder.INCLUDE_RE.match(line):

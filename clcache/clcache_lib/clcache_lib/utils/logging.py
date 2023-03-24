@@ -8,7 +8,6 @@ from pathlib import Path
 
 from ..config.config import VERSION
 from ..utils.file_lock import FileLock
-from ..utils.util import get_program_name
 
 
 class LogLevel(enum.IntEnum):
@@ -50,10 +49,10 @@ class MessageBuffer:
 
 def init_logger(log_dir: Path):
     if not log.messages:
-        log.program_name = get_program_name()
+        log.program_name = Path(sys.argv[0]).stem
         log_file = log_dir / f"{log.program_name }.log"
         log.messages = MessageBuffer(log_file)
-        
+
         # Immediately log command line arguments
         log(f"Command line: {' '.join(sys.argv[:])}")
 

@@ -19,18 +19,15 @@ def get_program_name() -> str:
     return Path(sys.argv[0]).stem
 
 
-def _print_binary(stream, data: bytes):
+def print_binary(stream, data: bytes):
     with OUTPUT_LOCK:
-        # split raw_data into chunks of 8192 bytes and write them to the stream
-        for i in range(0, len(data), 8192):
-            stream.buffer.write(data[i:i + 8192])
-
+        stream.buffer.write(data)
         stream.flush()
 
 
 def print_stdout_and_stderr(out: str, err: str, encoding: str):
-    _print_binary(sys.stdout, out.encode(encoding))
-    _print_binary(sys.stderr, err.encode(encoding))
+    print_binary(sys.stdout, out.encode(encoding))
+    print_binary(sys.stderr, err.encode(encoding))
 
 
 @functools.cache
@@ -136,7 +133,7 @@ def ensure_dir_exists(path: Path):
         raise
 
 
-def line_iter(str: str, strip=False) -> Generator[str, None, None]:
+def line_iter(str: str) -> Generator[str, None, None]:
     '''Iterate over lines in a string, separated by newline characters.'''
     pos = -1
     while True:
@@ -144,11 +141,11 @@ def line_iter(str: str, strip=False) -> Generator[str, None, None]:
         if next_pos < 0:
             break
         line = str[pos + 1:next_pos]
-        yield line.rstrip("\r\n") if strip else line
+        yield line.rstrip("\r\n")
         pos = next_pos
 
 
-def line_iter_b(str: bytes, strip=False) -> Generator[bytes, None, None]:
+def line_iter_b(str: bytes) -> Generator[bytes, None, None]:
     '''Iterate over lines in a bytestring, separated by newline characters.'''
     pos = -1
     while True:
@@ -156,7 +153,7 @@ def line_iter_b(str: bytes, strip=False) -> Generator[bytes, None, None]:
         if next_pos < 0:
             break
         line = str[pos + 1:next_pos]
-        yield line.rstrip(b"\r\n") if strip else line
+        yield line.rstrip(b"\r\n")
         pos = next_pos
 
 
