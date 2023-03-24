@@ -10,6 +10,8 @@ from typing import Generator
 
 import scandir
 
+from ..utils.logging import log
+
 OUTPUT_LOCK = threading.Lock()
 
 
@@ -167,19 +169,24 @@ def get_build_dir() -> Path:
     variable. If it is not set, use the current working directory 
     to determine it.
     '''
-    if value := os.environ.get("CLCACHE_BUILDDIR"):
-        build_dir = Path(value)
-        if build_dir.exists():
-            return normalize_dir(build_dir)
+    def impl():
+        if value := os.environ.get("CLCACHE_BUILDDIR"):
+            build_dir = Path(value)
+            if build_dir.exists():
+                return normalize_dir(build_dir)
 
-    # walk up the directory tree, starting at the current working directory,
-    # to find the build directory, as determined by the existence of the
-    # CMakeCache.txt file
-    for path in [Path.cwd()] + list(Path.cwd().parents):
-        if (path / "CMakeCache.txt").exists():
-            return normalize_dir(path)
+        # walk up the directory tree, starting at the current working directory,
+        # to find the build directory, as determined by the existence of the
+        # CMakeCache.txt file
+        for path in [Path.cwd()] + list(Path.cwd().parents):
+            if (path / "CMakeCache.txt").exists():
+                return normalize_dir(path)
 
-    return normalize_dir(Path.cwd())
+        return normalize_dir(Path.cwd())
+
+    result = impl()
+    log(f"<BUILDDIR> = {result}")
+    return result
 
 
 @functools.cache

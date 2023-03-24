@@ -8,6 +8,7 @@ from typing import List, Optional
 
 from ..utils import (get_long_path_name, get_short_path_name, line_iter,
                      line_iter_b, normalize_dir, resolve)
+from ..utils.logging import log
 from ..utils.util import get_build_dir
 from .ex import LogicException
 
@@ -60,6 +61,16 @@ def canonicalize_compile_output(compiler_output: str, stream: StdStream) -> str:
     return "\r\n".join(lines)
 
 
+def _path_starts_with(path: str, placeholder: str) -> bool:
+    """Check if a path starts with a placeholder."""
+    if not path.startswith(placeholder):
+        return False
+    elif len(path) == len(placeholder) or path[len(placeholder)] in ("\\", "/"):
+        return True
+    else:
+        raise LogicException(f"Invalid canonicalized path: {path}")
+
+
 @functools.cache
 def expand_path(path: str) -> Path:
     """Expand a path, replacing placeholders with the actual values."""
@@ -71,21 +82,25 @@ def expand_path(path: str) -> Path:
             raise LogicException(
                 f"No CLCACHE_BASEDIR set, but found relative path {path}"
             )
-    elif path.startswith(BUILDDIR_REPLACEMENT):
+    elif _path_starts_with(path, BUILDDIR_REPLACEMENT):
         return Path(path.replace(BUILDDIR_REPLACEMENT, str(BUILDDIR_STR), 1))
-    elif CONAN_USER_HOME and path.startswith(CONANDIR_REPLACEMENT):
+    elif CONAN_USER_HOME and _path_starts_with(path, CONANDIR_REPLACEMENT):
         return _expand_conan_placeholder(CONAN_USER_HOME, path)
-    elif QT_DIR_STR and path.startswith(QTDIR_REPLACEMENT):
+    elif QT_DIR_STR and _path_starts_with(path, QTDIR_REPLACEMENT):
         return Path(path.replace(QTDIR_REPLACEMENT, QT_DIR_STR, 1))
-    elif LLVM_DIR_STR and path.startswith(LLVM_REPLACEMENT):
+    elif LLVM_DIR_STR and _path_starts_with(path, LLVM_REPLACEMENT):
         return Path(path.replace(LLVM_REPLACEMENT, LLVM_DIR_STR, 1))
     elif m := RE_ENV.match(path):
-        if real_path := _get_env_path(m.group(1)):
-            return real_path / path[m.end(0)+1:]
+        paceholder = m.group(1)
+        if _path_starts_with(path, paceholder):
+            if real_path := _get_env_path(paceholder):
+                return real_path / path[m.end(0)+1:]
+            else:
+                raise LogicException(
+                    f"Unable to resolve environment variable {paceholder}"
+                )
         else:
-            raise LogicException(
-                f"Unable to resolve environment variable {m.group(1)}"
-            )
+            assert(False)
     else:
         return Path(path)
 
@@ -218,12 +233,16 @@ def _(path: Path, prefix: Optional[str], is_lower=False) -> bool:
 
 def subst_with_placeholder(path_str: str, prefix: Optional[str], placeholder: str) -> Optional[str]:
     """Replace path with a placeholder."""
-    assert path_str == path_str.lower()
+    if not prefix:
+        return None
 
-    if prefix:
-        prefix_lower = prefix.lower()
-        if path_str.startswith(prefix_lower):
-            return path_str.replace(prefix, placeholder, 1)
+    prefix_lower = prefix.lower()
+
+    if path_str == prefix_lower:
+        return placeholder
+
+    if path_str.startswith(prefix_lower) and path_str[len(prefix_lower)] in ('/', '\\'):
+        return path_str.replace(prefix, placeholder, 1)
 
     return None
 
@@ -232,7 +251,6 @@ def subst_with_placeholder(path_str: str, prefix: Optional[str], placeholder: st
 def _get_env_path(env: str) -> Optional[Path]:
     '''Get a path from an environment variable, and cache the result.'''
     return resolve(Path(value)) if (value := os.getenv(env)) else None
-
 
 
 @functools.cache
@@ -250,29 +268,34 @@ def _get_base_dir(build_dir: Path) -> Optional[Path]:
     Get the base directory from the CLCACHE_BASEDIR environment. 
     If it is not set, determine it from the CMakeCache.txt file.
     '''
-    if value := os.environ.get("CLCACHE_BASEDIR"):
-        base_dir = Path(value)
-        if base_dir.exists():
-            return normalize_dir(base_dir)
+    def impl():
+        if value := os.environ.get("CLCACHE_BASEDIR"):
+            base_dir = Path(value)
+            if base_dir.exists():
+                return normalize_dir(base_dir)
 
-    # try loading from CMakeCache.txt inside CLCACHE_BUILDDIR
-    cmake_cache_txt = build_dir / "CMakeCache.txt"
+        # try loading from CMakeCache.txt inside CLCACHE_BUILDDIR
+        cmake_cache_txt = build_dir / "CMakeCache.txt"
 
-    if not cmake_cache_txt.exists():
-        return None
+        if not cmake_cache_txt.exists():
+            return None
 
-    with open(cmake_cache_txt) as f:
-        for line in f:
-            line = line.strip()
-            if line.startswith("#") or line.startswith("\n"):
-                continue
+        with open(cmake_cache_txt) as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith("#") or line.startswith("\n"):
+                    continue
 
-            name_and_type, value = line.partition("=")[::2]
-            name, _ = name_and_type.partition(":")[::2]
-            if name == "CMAKE_HOME_DIRECTORY":
-                path = Path(value)
-                if path.exists():
-                    return normalize_dir(path)
+                name_and_type, value = line.partition("=")[::2]
+                name, _ = name_and_type.partition(":")[::2]
+                if name == "CMAKE_HOME_DIRECTORY":
+                    path = Path(value)
+                    if path.exists():
+                        return normalize_dir(path)
+
+    result = impl()
+    log(f"<BASEDIR> = {result}")
+    return result
 
 
 # This is the build dir, where the compiler is executed
