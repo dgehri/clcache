@@ -62,10 +62,10 @@ def flush_logger():
         log.messages.flush()
 
 
-def log(msg: str, level: LogLevel = LogLevel.TRACE) -> None:
+def log(msg: str, level: LogLevel = LogLevel.TRACE, force_flush: bool = False) -> None:
     # sourcery skip: use-contextlib-suppress
-    try:
-        if log.messages is not None:
+    if log.messages is not None:
+        try:
             # format message with process name, process id and trace level
             message = "[{0}] [{1}] [{2}] [{3}] {4}".format(
                 datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3],
@@ -77,8 +77,11 @@ def log(msg: str, level: LogLevel = LogLevel.TRACE) -> None:
 
             # accumulate messages in a list so that they can be printed later
             log.messages.append(message)
-    except Exception:
-        pass
+
+            if force_flush:
+                log.messages.flush()
+        except Exception:
+            pass
 
 
 log.messages = None

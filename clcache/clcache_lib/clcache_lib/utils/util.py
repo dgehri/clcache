@@ -182,7 +182,6 @@ def get_build_dir() -> Path:
         return normalize_dir(Path.cwd())
 
     result = impl()
-    log(f"<BUILDDIR> = {result}")
     return result
 
 

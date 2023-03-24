@@ -257,7 +257,13 @@ def main() -> int:
 if __name__ == "__main__":
     try:
         # get build folder
-        init_logger(get_build_dir())
+        build_dir = get_build_dir()
+        
+        # initialize logger if environment variable is set
+        if "CLCACHE_LOGGING" in os.environ:
+            init_logger(build_dir)
+            log(f"<BUILDDIR> = {build_dir}")
+            
         sys.exit(main())
     except Exception as e:
         # Print exception with full traceback

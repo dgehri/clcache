@@ -288,7 +288,7 @@ def _schedule_jobs(
         cache, compiler, cmd_line, header_file,
         output_file, environment, analyzer, options
     )
-    log("Finished. Exit code {0:d}".format(exit_code))
+    log("Finished. Exit code {0:d}".format(exit_code), force_flush=True)
     print_stdout_and_stderr(out, err, CL_DEFAULT_CODEC)
 
     return exit_code

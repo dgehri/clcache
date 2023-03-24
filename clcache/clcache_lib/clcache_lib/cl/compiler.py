@@ -28,10 +28,8 @@ from . import *  # type: ignore
 
 def invoke_real_compiler(compiler_path: Path,
                          cmd_line: List[str],
-                         capture_output: bool = False,
-                         environment: Optional[Dict[str, str]] = None) -> Tuple[int, str, str]:
-    '''Invoke the real compiler and return its exit code, stdout and stderr.'''
-
+                         environment: Optional[Dict[str, str]] = None) -> int:
+    '''Invoke the real compiler and return its exit code.'''
     set_llvm_dir(compiler_path)
 
     read_cmd_line = [str(compiler_path)] + cmd_line
@@ -45,7 +43,69 @@ def invoke_real_compiler(compiler_path: Path,
             return invoke_real_compiler(
                 compiler_path,
                 [f"@{os.path.realpath(rsp_file.name)}"],
-                capture_output,
+                environment,
+            )
+
+    log(f"Invoking real compiler as {' '.join(read_cmd_line)}")
+    environment = environment or dict(os.environ)
+
+    # Environment variable set by the Visual Studio IDE to make cl.exe write
+    # Unicode output to named pipes instead of stdout. Unset it to make sure
+    # we can catch stdout output.
+    environment.pop("VS_UNICODE_OUTPUT", None)
+
+    return_code: int = -1
+    # Intercept only stdout
+    sys.stderr.flush()
+    with TemporaryFile() as stdout_file:
+        compiler_process = subprocess.Popen(
+            read_cmd_line, stdout=stdout_file, stderr=subprocess.STDOUT, env=environment
+        )
+        return_code = compiler_process.wait()
+        stdout_file.seek(0)
+        stdout = stdout_file.read().decode(CL_DEFAULT_CODEC)
+
+    # iterate over stdout and collapse all <folder>/.. and <folder>\. to nothing
+    regex = re.compile(r'^(\w+): ([ \w]+):( +)(?P<file_path>\S.*)$')
+
+    lines = []
+    for line in line_iter(stdout):
+        if m := regex.match(line):
+            file_path = m['file_path']
+            sanitized_path = os.path.normpath(file_path)
+            lines.append(
+                f"{m[1]}: {m[2]}:{m[3]}{sanitized_path}")
+        else:
+            lines.append(line)
+
+    lines.append("")
+
+    # print stdout to console
+    sanitized_stdout = "\r\n".join(lines)
+    log("Real compiler returned code {0:d}".format(
+        return_code), force_flush=True)
+    print_binary(sys.stdout, sanitized_stdout.encode(CL_DEFAULT_CODEC))
+    return return_code
+
+
+def capture_real_compiler(compiler_path: Path,
+                          cmd_line: List[str],
+                          environment: Optional[Dict[str, str]] = None) -> Tuple[int, str, str]:
+    '''Invoke the real compiler and return its exit code, stdout and stderr.'''
+
+    set_llvm_dir(compiler_path)
+
+    read_cmd_line = [str(compiler_path)] + cmd_line
+
+    # if command line longer than 32767 chars, use a response file
+    # See https://devblogs.microsoft.com/oldnewthing/20031210-00/?p=41553
+    if len(" ".join(read_cmd_line)) >= 32000:  # keep some chars as a safety margin
+        with TemporaryFile(mode="wt", suffix=".rsp") as rsp_file:
+            rsp_file.writelines(" ".join(cmd_line) + "\n")
+            rsp_file.flush()
+            return capture_real_compiler(
+                compiler_path,
+                [f"@{os.path.realpath(rsp_file.name)}"],
                 environment,
             )
 
@@ -59,27 +119,21 @@ def invoke_real_compiler(compiler_path: Path,
     environment.pop("VS_UNICODE_OUTPUT", None)
 
     return_code: int = -1
-    stdout: str = ""
-    stderr: str = ""
-    if capture_output:
-        # Don't use subprocess.communicate() here, it's slow due to internal
-        # threading.
-        with TemporaryFile() as stdout_file, TemporaryFile() as stderr_file:
-            compilerProcess = subprocess.Popen(
-                read_cmd_line, stdout=stdout_file, stderr=stderr_file, env=environment
-            )
-            return_code = compilerProcess.wait()
-            stdout_file.seek(0)
-            stdout = stdout_file.read().decode(CL_DEFAULT_CODEC)  # type: ignore
-            stderr_file.seek(0)
-            stderr = stderr_file.read().decode(CL_DEFAULT_CODEC)
-    else:
-        sys.stdout.flush()
-        sys.stderr.flush()
-        return_code = subprocess.call(read_cmd_line, env=environment)
 
-    log("Real compiler returned code {0:d}".format(return_code))
+    # Don't use subprocess.communicate() here, it's slow due to internal
+    # threading.
+    with TemporaryFile() as stdout_file, TemporaryFile() as stderr_file:
+        compiler_process = subprocess.Popen(
+            read_cmd_line, stdout=stdout_file, stderr=stderr_file, env=environment
+        )
+        return_code = compiler_process.wait()
+        stdout_file.seek(0)
+        stdout = stdout_file.read().decode(CL_DEFAULT_CODEC)
+        stderr_file.seek(0)
+        stderr = stderr_file.read().decode(CL_DEFAULT_CODEC)
 
+    log("Real compiler returned code {0:d}".format(
+        return_code), force_flush=True)
     return return_code, stdout, stderr
 
 
@@ -135,9 +189,7 @@ def process_compile_request(cache: Cache, compiler_path: Path, args: List[str]) 
             f"Cannot cache invocation as {cmdline}: called for preprocessing")
         cache.statistics.record_cache_miss(MissReason.CALL_FOR_PREPROCESSING)
 
-    exit_code, out, err = invoke_real_compiler(compiler_path, args)
-    print_stdout_and_stderr(out, err, CL_DEFAULT_CODEC)
-    return exit_code
+    return invoke_real_compiler(compiler_path, args)
 
 
 def _extend_cmdline_from_env(cmd_line: List[str],
@@ -309,7 +361,8 @@ class ClCommandLineAnalyzer(CommandLineAnalyzer):
                 for f, _ in input_files
             ]
 
-        log(f"Compiler source files: {';'.join([str(f) for f, _ in input_files])}")
+        log(
+            f"Compiler source files: {';'.join([str(f) for f, _ in input_files])}")
         log(f"Compiler object file: {';'.join([str(f) for f in obj_files])}")
         return input_files, obj_files
 
@@ -448,7 +501,7 @@ def _schedule_jobs(
         exit_code, out, err = _process_single_source(
             cache, compiler, job_cmdline, src_file, obj_file, environment, analyzer
         )
-        log(f"Finished. Exit code {exit_code}")
+        log(f"Finished. Exit code {exit_code}", force_flush=True)
         print_stdout_and_stderr(out, err, CL_DEFAULT_CODEC)
     else:
         with concurrent.futures.ThreadPoolExecutor(
@@ -471,7 +524,8 @@ def _schedule_jobs(
                 )
             for future in concurrent.futures.as_completed(jobs):
                 exit_code, out, err = future.result()
-                log("Finished. Exit code {0:d}".format(exit_code))
+                log("Finished. Exit code {0:d}".format(
+                    exit_code), force_flush=True)
                 print_stdout_and_stderr(out, err, CL_DEFAULT_CODEC)
 
                 if exit_code != 0:
@@ -511,7 +565,7 @@ def _process_single_source(cache: Cache,
     except Exception as e:
         # format exception with full call stack to string
         log(f"Exception occurred: {traceback.format_exc()}", LogLevel.ERROR)
-        return invoke_real_compiler(compiler, cmdline, environment=environment)
+        return capture_real_compiler(compiler, cmdline, environment=environment)
 
 
 def _process(cache: Cache,
@@ -598,8 +652,7 @@ def _process(cache: Cache,
         if manifest_hit:
             log("Manifest hit, but no object file found in cache")
             # Got a manifest, but no object => invoke real compiler
-            compiler_result = invoke_real_compiler(
-                compiler_path, cmdline, capture_output=True)
+            compiler_result = capture_real_compiler(compiler_path, cmdline)
 
             with cache.manifest_lock_for(manifest_hash):
                 assert cachekey is not None
@@ -618,8 +671,8 @@ def _process(cache: Cache,
                 strip_includes = True
 
             # Invoke real compiler and get output
-            exit_code, compiler_out, compiler_err = invoke_real_compiler(
-                compiler_path, cmdline, capture_output=True)
+            exit_code, compiler_out, compiler_err = capture_real_compiler(
+                compiler_path, cmdline)
 
             # Create manifest entry
             include_paths, stripped_compiler_out = _parse_includes_set(
@@ -766,7 +819,7 @@ def _parse_includes_set(compiler_output: str, src_file: Path, strip: bool) -> Tu
 
     abs_src_file = src_file.absolute()
     for line in line_iter(compiler_output):
-        if m := regex.match(line.rstrip("\r\n")):
+        if m := regex.match(line):
             file_path = Path(os.path.normpath(m["file_path"])).absolute()
             if file_path != abs_src_file:
                 include_set.add(file_path)
