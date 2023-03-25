@@ -60,7 +60,7 @@ class FileLock:
         if elapsed > 1:
             from ..utils.logging import LogLevel, log
             log(
-                f"Waited for lock {self._mutex_name} during {elapsed:.3f} s",
+                f"Waited for lock {self._mutex_name} during {elapsed:.1f} s",
                 LogLevel.WARN,
             )
 
@@ -71,7 +71,7 @@ class FileLock:
             if elapsed > 1:
                 from ..utils.logging import LogLevel, log
                 log(
-                    f"Held lock for {self._mutex_name} during {elapsed:.3f} s",
+                    f"Held lock for {self._mutex_name} during {elapsed:.1f} s",
                     LogLevel.WARN,
                 )
 

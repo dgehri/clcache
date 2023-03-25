@@ -1,11 +1,10 @@
 import contextlib
 import os
 from pathlib import Path
-from typing import Callable, Optional
-
-from clcache_lib.utils.logging import LogLevel, log
+from typing import Callable, Optional, Tuple, BinaryIO
 
 from ..config.config import VERSION
+from ..utils.logging import LogLevel, log
 from .file_cache import CacheFileStrategy, CompilerArtifacts
 from .stats import CacheStats, MissReason, PersistentStats, Stats
 
@@ -20,7 +19,8 @@ class Cache:
                     url, cache_dir=cache_dir)
                 return
             except Exception as e:
-                log(f"Failed to initialize Couchbase cache using {url}", LogLevel.WARN)
+                log(
+                    f"Failed to initialize Couchbase cache using {url}", LogLevel.WARN)
 
         self.strategy = CacheFileStrategy(cache_dir=cache_dir)
 
@@ -84,8 +84,8 @@ class Cache:
     def set_manifest(self, manifest_hash, manifest):
         return self.strategy.set_manifest(manifest_hash, manifest)
 
-    def get_manifest(self, manifest_hash):
-        return self.strategy.get_manifest(manifest_hash)
+    def get_manifest(self, manifest_hash: str, skip_remote: bool=False):
+        return self.strategy.get_manifest(manifest_hash, skip_remote)
 
 
 def clean_cache(cache: Cache):
@@ -98,13 +98,63 @@ def clear_cache(cache: Cache):
         cache.clear()
 
 
-def add_object_to_cache(cache: Cache,
-                        cache_key: str,
-                        artifacts: CompilerArtifacts,
-                        reason: MissReason,
-                        action: Optional[Callable[[], int]] = None):
+def ensure_artifacts_exist(cache: Cache,
+                           cache_key: str,
+                           reason: MissReason,
+                           payload: Path,
+                           compiler_result: Tuple[int, str, str],
+                           canonicalize_stdout: Optional[Callable[[
+                               str], str]] = None,
+                           canonicalize_stderr: Optional[Callable[[
+                               str], str]] = None,
+                           post_commit_action: Optional[Callable[[
+                           ], int]] = None,
+                           output_file_filter: Optional[Callable[[BinaryIO, BinaryIO], None]] = None
+                           ) -> Tuple[int, str, str]:
+    '''
+    Ensure that the artifacts for the given cache key exist.
 
-    size = 0
+    Parameters:
+        cache: The cache to use.
+        cache_key: The cache key to use.
+        reason: The reason for the cache miss.
+        payload: The path to the payload file.
+        compiler_result: The result of the compiler invocation.
+        canonicalize_stdout: A function to canonicalize the compiler stdout.
+        canonicalize_stderr: A function to canonicalize the compiler stderr.
+        post_commit_action: An action to execute after the cache entry was added.
+        output_file_filter: A function to filter the output files.
+
+    Returns:
+        Tuple[int, str, str]: A tuple containing the exit code, stdout and stderr.
+    '''
+    return_code, compiler_stdout, compiler_stderr = compiler_result
+    if return_code == 0 and payload.exists():
+        artifacts = CompilerArtifacts(
+            payload,
+            canonicalize_stdout(
+                compiler_stdout) if canonicalize_stdout else compiler_stdout,
+            canonicalize_stderr(
+                compiler_stderr) if canonicalize_stderr else compiler_stderr,
+            output_file_filter
+        )
+
+        log(
+            f"Adding file {artifacts.payload_path} to cache using key {cache_key}")
+
+        _add_object_to_cache(cache, cache_key, artifacts,
+                             reason, post_commit_action)
+
+    return return_code, compiler_stdout, compiler_stderr
+
+
+def _add_object_to_cache(cache: Cache,
+                         cache_key: str,
+                         artifacts: CompilerArtifacts,
+                         reason: MissReason,
+                         post_commit_action: Optional[Callable[[], int]] = None):
+
+    size: int = 0
 
     with cache.lock_for(cache_key):
         # If the cache entry is not present, add it.
@@ -113,11 +163,11 @@ def add_object_to_cache(cache: Cache,
 
             size = cache.set_entry(cache_key, artifacts)
             if size is None:
-                size = os.path.getsize(artifacts.obj_file_path)
+                size = os.path.getsize(artifacts.payload_path)
 
-    if action:
+    if post_commit_action:
         # Always execute the action, even if the cache entry was present.
-        size += action()
+        size += post_commit_action()
 
     cache.statistics.register_cache_entry_size(size)
 

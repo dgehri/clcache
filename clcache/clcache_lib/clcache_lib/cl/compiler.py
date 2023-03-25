@@ -5,13 +5,13 @@ import re
 import subprocess
 import sys
 import time
+import traceback
 from pathlib import Path
 from tempfile import TemporaryFile
-import traceback
 from typing import Dict, Iterator, List, Optional, Set, Tuple
 
 from ..cache import *  # type: ignore
-from ..cache.cache import Cache
+from ..cache.cache import Cache, ensure_artifacts_exist
 from ..cache.file_cache import ManifestRepository
 from ..cache.manifest_entry import create_manifest_entry
 from ..cache.stats import MissReason
@@ -22,13 +22,12 @@ from ..utils.args import (ArgumentT1, ArgumentT2, ArgumentT3, ArgumentT4,
                           CommandLineAnalyzer, expand_response_file,
                           split_comands_file)
 from ..utils.errors import *
-from ..utils.util import (line_iter, print_stdout_and_stderr)
+from ..utils.util import line_iter, print_stdout_and_stderr
 from . import *  # type: ignore
 
 
-def invoke_real_compiler(compiler_path: Path,
-                         cmd_line: List[str],
-                         environment: Optional[Dict[str, str]] = None) -> int:
+def _invoke_real_compiler(compiler_path: Path,
+                          cmd_line: List[str]) -> int:
     '''Invoke the real compiler and return its exit code.'''
     set_llvm_dir(compiler_path)
 
@@ -40,18 +39,17 @@ def invoke_real_compiler(compiler_path: Path,
         with TemporaryFile(mode="wt", suffix=".rsp") as rsp_file:
             rsp_file.writelines(" ".join(cmd_line) + "\n")
             rsp_file.flush()
-            return invoke_real_compiler(
+            return _invoke_real_compiler(
                 compiler_path,
-                [f"@{os.path.realpath(rsp_file.name)}"],
-                environment,
+                [f"@{os.path.realpath(rsp_file.name)}"]
             )
 
-    log(f"Invoking real compiler as {' '.join(read_cmd_line)}")
-    environment = environment or dict(os.environ)
+    log(f"Invoking compiler: {' '.join(read_cmd_line)}")
 
     # Environment variable set by the Visual Studio IDE to make cl.exe write
     # Unicode output to named pipes instead of stdout. Unset it to make sure
     # we can catch stdout output.
+    environment = dict(os.environ)
     environment.pop("VS_UNICODE_OUTPUT", None)
 
     return_code: int = -1
@@ -85,15 +83,15 @@ def invoke_real_compiler(compiler_path: Path,
 
     # print stdout to console
     sanitized_stdout = "\r\n".join(lines)
-    log("Real compiler returned code {0:d}".format(
+    log("Real compiler return code: {0:d}".format(
         return_code), force_flush=True)
     print_binary(sys.stdout, sanitized_stdout.encode(CL_DEFAULT_CODEC))
     return return_code
 
 
-def capture_real_compiler(compiler_path: Path,
-                          cmd_line: List[str],
-                          environment: Optional[Dict[str, str]] = None) -> Tuple[int, str, str]:
+def _capture_real_compiler(compiler_path: Path,
+                           cmd_line: List[str],
+                           environment: Optional[Dict[str, str]] = None) -> Tuple[int, str, str]:
     '''Invoke the real compiler and return its exit code, stdout and stderr.'''
 
     set_llvm_dir(compiler_path)
@@ -106,13 +104,13 @@ def capture_real_compiler(compiler_path: Path,
         with TemporaryFile(mode="wt", suffix=".rsp") as rsp_file:
             rsp_file.writelines(" ".join(cmd_line) + "\n")
             rsp_file.flush()
-            return capture_real_compiler(
+            return _capture_real_compiler(
                 compiler_path,
                 [f"@{os.path.realpath(rsp_file.name)}"],
                 environment,
             )
 
-    log(f"Invoking real compiler as {' '.join(read_cmd_line)}")
+    log(f"Invoking compiler: {' '.join(read_cmd_line)}")
 
     environment = environment or dict(os.environ)
 
@@ -135,7 +133,7 @@ def capture_real_compiler(compiler_path: Path,
         stderr_file.seek(0)
         stderr = stderr_file.read().decode(CL_DEFAULT_CODEC)
 
-    log("Real compiler returned code {0:d}".format(
+    log("Real compiler returned code: {0:d}".format(
         return_code), force_flush=True)
     return return_code, stdout, stderr
 
@@ -147,13 +145,13 @@ def process_compile_request(cache: Cache, compiler_path: Path, args: List[str]) 
     Returns:
         The exit code of the compiler.
     '''
-    log("Parsing given commandline '{0!s}'".format(" ".join(args)))
+    log("Command line: '{0!s}'".format(" ".join(args)))
 
     set_llvm_dir(compiler_path)
 
     cmdline, environment = _extend_cmdline_from_env(args, dict(os.environ))
     cmdline = expand_response_file(cmdline)
-    log("Expanded commandline '{0!s}'".format(" ".join(cmdline)))
+    log("Expanded commandline: '{0!s}'".format(" ".join(cmdline)))
 
     try:
         analyzer = ClCommandLineAnalyzer()
@@ -192,7 +190,7 @@ def process_compile_request(cache: Cache, compiler_path: Path, args: List[str]) 
             f"Cannot cache invocation as {cmdline}: called for preprocessing")
         cache.statistics.record_cache_miss(MissReason.CALL_FOR_PREPROCESSING)
 
-    return invoke_real_compiler(compiler_path, args)
+    return _invoke_real_compiler(compiler_path, args)
 
 
 def _extend_cmdline_from_env(cmd_line: List[str],
@@ -364,9 +362,8 @@ class ClCommandLineAnalyzer(CommandLineAnalyzer):
                 for f, _ in input_files
             ]
 
-        log(
-            f"Compiler source files: {';'.join([str(f) for f, _ in input_files])}")
-        log(f"Compiler object file: {';'.join([str(f) for f in obj_files])}")
+        log(f"Input files: {';'.join([str(f) for f, _ in input_files])}")
+        log(f"Output files: {';'.join([str(f) for f in obj_files])}")
         return input_files, obj_files
 
 
@@ -434,7 +431,7 @@ def _process_cache_hit(cache: Cache, obj_file: Path, cache_key: str) -> Tuple[in
         cached_artifacts = cache.get_entry(cache_key)
         assert cached_artifacts is not None
 
-        copy_from_cache(cached_artifacts.obj_file_path, obj_file)
+        copy_from_cache(cached_artifacts.payload_path, obj_file)
         return (
             0,
             expand_compile_output(cached_artifacts.stdout, StdStream.STDOUT),
@@ -568,7 +565,7 @@ def _process_single_source(cache: Cache,
     except Exception as e:
         # format exception with full call stack to string
         log(f"Exception occurred: {traceback.format_exc()}", LogLevel.ERROR)
-        return capture_real_compiler(compiler, cmdline, environment=environment)
+        return _capture_real_compiler(compiler, cmdline, environment=environment)
 
 
 def _process(cache: Cache,
@@ -599,7 +596,7 @@ def _process(cache: Cache,
     # job wait for the 1st job to finish compiling the source file is more efficient overall.
     with FileLock(manifest_hash, 120*1000*1000):
         manifest_hit = False
-        cachekey = None
+        cache_key = None
 
         with cache.manifest_lock_for(manifest_hash):
             try:
@@ -626,23 +623,23 @@ def _process(cache: Cache,
                                 continue
 
                             # Include files have not changed, we have a hit!
-                            cachekey = entry.objectHash
+                            cache_key = entry.objectHash
                             manifest_hit = True
 
                             # Check if object file exists in cache
-                            with cache.lock_for(cachekey):
-                                hit = cache.has_entry(cachekey)
+                            with cache.lock_for(cache_key):
+                                hit = cache.has_entry(cache_key)
                                 if hit:
                                     # Move manifest entry to the top of the entries in the manifest
                                     # (if not already at top), so that we can use LRU replacement
                                     if entry_index > 0:
                                         log("Moving manifest entry to top of manifest")
-                                        manifest.touch_entry(cachekey)
+                                        manifest.touch_entry(cache_key)
                                         cache.set_manifest(
                                             manifest_hash, manifest)
 
                                     # Object cache hit!
-                                    return _process_cache_hit(cache, obj_file, cachekey)
+                                    return _process_cache_hit(cache, obj_file, cache_key)
 
                     miss_reason = MissReason.HEADER_CHANGED_MISS
                 else:
@@ -655,13 +652,20 @@ def _process(cache: Cache,
         if manifest_hit:
             log("Manifest hit, but no object file found in cache")
             # Got a manifest, but no object => invoke real compiler
-            compiler_result = capture_real_compiler(compiler_path, cmdline)
+            compiler_result = _capture_real_compiler(compiler_path, cmdline)
 
             with cache.manifest_lock_for(manifest_hash):
-                assert cachekey is not None
-                return _ensure_artifacts_exist(
-                    cache, cachekey, miss_reason, obj_file, compiler_result
-                )
+                assert cache_key is not None
+                return ensure_artifacts_exist(
+                    cache,
+                    cache_key,
+                    miss_reason,
+                    obj_file,
+                    compiler_result,
+                    canonicalize_stdout=lambda s: canonicalize_compile_output(
+                        s, StdStream.STDOUT),
+                    canonicalize_stderr=lambda s: canonicalize_compile_output(
+                        s, StdStream.STDERR))
         else:
             log("Manifest miss, invoking real compiler")
             # Also generate manifest
@@ -674,7 +678,7 @@ def _process(cache: Cache,
                 strip_includes = True
 
             # Invoke real compiler and get output
-            exit_code, compiler_out, compiler_err = capture_real_compiler(
+            exit_code, compiler_out, compiler_err = _capture_real_compiler(
                 compiler_path, cmdline)
 
             # Create manifest entry
@@ -685,7 +689,7 @@ def _process(cache: Cache,
                 exit_code, stripped_compiler_out, compiler_err)
 
             entry = create_manifest_entry(manifest_hash, include_paths)
-            cachekey = entry.objectHash
+            cache_key = entry.objectHash
 
             def add_manifest() -> int:
                 with cache.manifest_lock_for(manifest_hash):
@@ -699,52 +703,17 @@ def _process(cache: Cache,
                     new_size = cache.set_manifest(manifest_hash, manifest)
                     return new_size - old_size
 
-            return _ensure_artifacts_exist(
+            return ensure_artifacts_exist(
                 cache,
-                cachekey,
+                cache_key,
                 miss_reason,
                 obj_file,
                 compiler_result,
-                add_manifest,
-            )
-
-
-def _ensure_artifacts_exist(cache: Cache, cache_key: str,
-                            reason: MissReason,
-                            obj_file: Path,
-                            compiler_result: Tuple[int, str, str],
-                            action: Optional[Callable[[], int]] = None
-                            ) -> Tuple[int, str, str]:
-    '''
-    Ensure that the artifacts for the given cache key exist.
-
-    Parameters:
-        cache (Cache): The cache to use.
-        cache_key (str): The cache key to use.
-        reason (Callable[[Statistics], None]): The reason for the cache miss.
-        obj_file (Path): The object file to create.
-        compiler_result (Tuple[int, str, str]): The result of the compiler invocation.
-        action (Callable[[], None]): An optional action to perform unconditionally.
-
-    Returns:
-        Tuple[int, str, str]: A tuple containing the exit code, stdout and stderr.
-    '''
-    return_code, compiler_stdout, compiler_stderr = compiler_result
-    if return_code == 0 and obj_file.exists():
-        artifacts = CompilerArtifacts(
-            obj_file,
-            canonicalize_compile_output(
-                compiler_stdout, StdStream.STDOUT),
-            canonicalize_compile_output(
-                compiler_stderr, StdStream.STDERR),
-        )
-
-        log(
-            f"Adding file {artifacts.obj_file_path} to cache using key {cache_key}")
-
-        add_object_to_cache(cache, cache_key, artifacts, reason, action)
-
-    return return_code, compiler_stdout, compiler_stderr
+                canonicalize_stdout=lambda s: canonicalize_compile_output(
+                    s, StdStream.STDOUT),
+                canonicalize_stderr=lambda s: canonicalize_compile_output(
+                    s, StdStream.STDERR),
+                post_commit_action=add_manifest)
 
 
 def _get_manifest_hash(compiler_path: Path,
@@ -786,7 +755,7 @@ def _get_manifest_hash(compiler_path: Path,
     cmd_line.extend(canonicalize_path_arg(value) for value in input_files)
 
     toolset_data = "{}|{}|{}".format(
-        compiler_hash, cmd_line, ManifestRepository.MANIFEST_FILE_FORMAT_VERSION
+        compiler_hash, cmd_line, ManifestRepository.MANIFEST_FILE_CL_FORMAT_VERSION
     )
     return get_file_hash(src_file, toolset_data)
 

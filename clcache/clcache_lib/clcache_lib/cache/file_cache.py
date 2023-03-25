@@ -2,8 +2,8 @@ import contextlib
 import json
 import os
 import time
-from shutil import copyfile, copyfileobj
-from typing import List, NamedTuple, Tuple
+from shutil import copyfileobj
+from typing import BinaryIO, Callable, List, NamedTuple, Tuple, cast
 
 import lz4.frame
 from atomicwrites import atomic_write
@@ -26,9 +26,10 @@ class CompilerArtifacts(NamedTuple):
         - stdout: stdout of the compiler
         - stderr: stderr of the compiler
     '''
-    obj_file_path: Path
+    payload_path: Path
     stdout: str
     stderr: str
+    copy_filter: Optional[Callable[[BinaryIO, BinaryIO], None]] = None
 
 
 class ManifestEntry(NamedTuple):
@@ -37,11 +38,22 @@ class ManifestEntry(NamedTuple):
 
         - includeFiles: list of paths to include files, which this source file uses
         - includesContentHash: hash of the contents of the include_files
-        - objectHash: hash of the object in cache
+        - objectHash: hash calculated from includeContentHash and the manifest hash
     '''
     includeFiles: List[str]
     includesContentHash: str
     objectHash: str
+
+    def __hash__(self):
+        '''
+        Returns the hash
+
+        The includesContentHash is a function of the includeFiles, 
+        while the objectHash is a function of the manifest hash and the 
+        includesContentHash. Therefore, for a given manifest file, the 
+        includesContentHash uniquely identifies the entry.
+        '''
+        return hash(self.includesContentHash)
 
 
 class Manifest:
@@ -50,9 +62,9 @@ class Manifest:
     def __init__(self, entries: Optional[List[ManifestEntry]] = None):
         if entries is None:
             entries = []
-        self._entries = entries.copy()
+        self._entries: List[ManifestEntry] = entries.copy()
 
-    def entries(self):
+    def entries(self) -> List[ManifestEntry]:
         return self._entries
 
     def add_entry(self, entry: ManifestEntry):
@@ -159,7 +171,8 @@ class ManifestRepository:
     # invalidation, such that a manifest that was stored using the old format is not
     # interpreted using the new format. Instead the old file will not be touched
     # again due to a new manifest hash and is cleaned away after some time.
-    MANIFEST_FILE_FORMAT_VERSION = 6
+    MANIFEST_FILE_CL_FORMAT_VERSION = 6
+    MANIFEST_FILE_MOC_FORMAT_VERSION = 8
 
     def __init__(self, manifest_root_dir: Path):
         self._manifestsRootDir: Path = manifest_root_dir
@@ -210,7 +223,7 @@ class ManifestRepository:
 
 
 class CompilerArtifactsSection:
-    OBJECT_FILE: str = "object"
+    PAYLOAD_FILE: str = "object"
     STDOUT_FILE: str = "output.txt"
     STDERR_FILE: str = "stderr.txt"
 
@@ -231,7 +244,7 @@ class CompilerArtifactsSection:
         paths: List[Path] = []
 
         base_path = self.cache_entry_dir(
-            key) / CompilerArtifactsSection.OBJECT_FILE
+            key) / CompilerArtifactsSection.PAYLOAD_FILE
 
         if base_path.exists():
             paths.append(base_path)
@@ -252,7 +265,7 @@ class CompilerArtifactsSection:
         entry_dir: Path = self.cache_entry_dir(key)
         return entry_dir.exists() and any(entry_dir.iterdir())
 
-    def set_entry(self, key: str, artifacts: CompilerArtifacts) -> int:
+    def set_entry(self, key: str, artifacts: CompilerArtifacts) -> Tuple[int, Optional[Path]]:
         # sourcery skip: extract-method
         '''
         Sets the cache entry for the given key to the given artifacts.
@@ -270,9 +283,13 @@ class CompilerArtifactsSection:
             size = 0
 
             # Write the object file to file
-            if artifacts.obj_file_path is not None:
-                dst_file_path = temp_entry_dir / CompilerArtifactsSection.OBJECT_FILE
-                size = _copy_to_cache(artifacts.obj_file_path, dst_file_path)
+            compressed_payload_path = None
+            if artifacts.payload_path is not None:
+                dst_file_path = temp_entry_dir / CompilerArtifactsSection.PAYLOAD_FILE
+                size, obj_file_name = _copy_to_cache(
+                    artifacts.payload_path, dst_file_path, artifacts.copy_filter)
+
+                compressed_payload_path = cache_entry_dir / obj_file_name
 
             # Write the stdout to file
             self._write_to_cache(
@@ -293,7 +310,8 @@ class CompilerArtifactsSection:
                 rmtree(cache_entry_dir, ignore_errors=True)
 
             temp_entry_dir.replace(cache_entry_dir)
-            return size
+
+            return size, compressed_payload_path
         finally:
             # Clean up the temporary directory
             if temp_entry_dir.exists():
@@ -318,7 +336,7 @@ class CompilerArtifactsSection:
         size = 0
         if "obj" in payload:
             obj_path = os.path.join(
-                temp_entry_dir, f"{CompilerArtifactsSection.OBJECT_FILE}.lz4"
+                temp_entry_dir, f"{CompilerArtifactsSection.PAYLOAD_FILE}.lz4"
             )
             with open(obj_path, "wb") as f:
                 f.write(payload["obj"])
@@ -345,7 +363,7 @@ class CompilerArtifactsSection:
         cache_entry_dir = self.cache_entry_dir(key)
 
         # "touch" the cache entry to update its last modified time
-        obj_file = cache_entry_dir / CompilerArtifactsSection.OBJECT_FILE
+        obj_file = cache_entry_dir / CompilerArtifactsSection.PAYLOAD_FILE
         obj_file.touch()
 
         return CompilerArtifacts(
@@ -504,6 +522,11 @@ class CacheFileStrategy:
 
     def set_entry(self, key: str, value) -> int:
         '''Set the entry for the given key to the given value and return the size of the entry in bytes.'''
+        size, _ = self.set_entry_ex(key, value)
+        return size
+
+    def set_entry_ex(self, key: str, value) -> Tuple[int, Optional[Path]]:
+        '''Set the entry for the given key to the given value and return the size of the entry in bytes.'''
         return self.compiler_artifacts_repository.section(key).set_entry(key, value)
 
     def set_entry_from_payload(self, key: str, payload: dict) -> int:
@@ -530,7 +553,7 @@ class CacheFileStrategy:
             manifest_hash, manifest
         )
 
-    def get_manifest(self, manifest_hash: str) -> Optional[Tuple[Manifest, int]]:
+    def get_manifest(self, manifest_hash: str, _: bool = True) -> Optional[Tuple[Manifest, int]]:
         return self.manifests_repository.section(manifest_hash).get_manifest(manifest_hash)
 
     def clear(self):
@@ -566,7 +589,10 @@ class CacheFileStrategy:
         self.current_stats.clear_cache_entries()
 
 
-def _copy_to_cache(src_file_path: Path, dst_file_path: Path) -> int:
+def _copy_to_cache(src_file_path: Path,
+                   dst_file_path: Path,
+                   copy_filter: Optional[Callable[[BinaryIO, BinaryIO], None]] = None) \
+        -> Tuple[int, str]:
     '''
     Copy a file to the cache.
 
@@ -579,17 +605,23 @@ def _copy_to_cache(src_file_path: Path, dst_file_path: Path) -> int:
     '''
     ensure_dir_exists(dst_file_path.parent)
 
+    if copy_filter is None:
+        copy_filter = copyfileobj
+
     temp_dst: Path = dst_file_path.parent / f"{dst_file_path.name}.tmp"
-    dst_file_path = dst_file_path.parent / f"{dst_file_path.name}.lz4"
+    compressed_dst_file_name = f"{dst_file_path.name}.lz4"
+    compressed_dst_file_path = dst_file_path.parent / compressed_dst_file_name
     with open(src_file_path, "rb") as file_in:
         with lz4.frame.open(temp_dst, mode="wb") as file_out:
-            copyfileobj(file_in, file_out)  # type: ignore
+            copy_filter(file_in, cast(BinaryIO, file_out))
 
-    temp_dst.replace(dst_file_path)
-    return dst_file_path.stat().st_size
+    temp_dst.replace(compressed_dst_file_path)
+    return compressed_dst_file_path.stat().st_size, compressed_dst_file_name
 
 
-def copy_from_cache(src_file: Path, dst_file: Path):
+def copy_from_cache(src_file: Path,
+                    dst_file: Path,
+                    copy_filter: Optional[Callable[[BinaryIO, BinaryIO], None]] = None):
     '''
     Copy a file from the cache.
 
@@ -599,13 +631,13 @@ def copy_from_cache(src_file: Path, dst_file: Path):
     '''
     ensure_dir_exists(dst_file.absolute().parent)
 
+    if copy_filter is None:
+        copy_filter = copyfileobj
+
     temp_dst: Path = dst_file.parent / f"{dst_file.name}.tmp"
 
-    if os.path.exists(f"{src_file}.lz4"):
-        with lz4.frame.open(f"{src_file}.lz4", mode="rb") as file_in:
-            with open(temp_dst, "wb") as file_out:
-                copyfileobj(file_in, file_out)  # type: ignore
-    else:
-        copyfile(src_file, temp_dst)
+    with lz4.frame.open(f"{src_file}.lz4", mode="rb") as file_in:
+        with open(temp_dst, "wb") as file_out:
+            copy_filter(cast(BinaryIO, file_in), file_out)
 
     temp_dst.replace(dst_file)

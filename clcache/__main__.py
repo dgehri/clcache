@@ -220,7 +220,7 @@ def _get_compiler_path() -> Tuple[Path, ModuleType, List[str]]:
             "Failed to locate specified compiler, or exe on PATH (and CLCACHE_CL is not set), aborting."
         )
 
-    log(f"Found real compiler binary at {compiler_path}")
+    log(f"Compiler binary: {compiler_path}")
     return compiler_path, compiler_pkg, args
 
 
