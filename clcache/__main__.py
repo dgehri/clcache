@@ -258,11 +258,11 @@ if __name__ == "__main__":
     try:
         # get build folder
         build_dir = get_build_dir()
-        
+
         # initialize logger if environment variable is set
-        if "CLCACHE_LOGGING" in os.environ:
+        if "CLCACHE_DISABLE_LOGGING" not in os.environ:
             init_logger(build_dir)
-            
+
         sys.exit(main())
     except Exception as e:
         # Print exception with full traceback
