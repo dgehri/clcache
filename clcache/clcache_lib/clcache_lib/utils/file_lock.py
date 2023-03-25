@@ -2,8 +2,6 @@ import datetime
 from ctypes import windll, wintypes
 from pathlib import Path
 
-from ..utils.logging import LogLevel, log
-
 
 class FileLockException(Exception):
     pass
@@ -54,11 +52,13 @@ class FileLock:
                 error_string = "Error! WaitForSingleObject returns {result}, last error {error}".format(
                     result=result, error=windll.kernel32.GetLastError()
                 )
+            from ..utils.logging import LogLevel, log
             log(error_string, LogLevel.ERROR)
             raise FileLockException(error_string)
 
         elapsed = (datetime.datetime.now() - self._t0).total_seconds()
         if elapsed > 1:
+            from ..utils.logging import LogLevel, log
             log(
                 f"Waited for lock {self._mutex_name} during {elapsed:.3f} s",
                 LogLevel.WARN,
@@ -69,6 +69,7 @@ class FileLock:
         if self._t0:
             elapsed = (datetime.datetime.now() - self._t0).total_seconds()
             if elapsed > 1:
+                from ..utils.logging import LogLevel, log
                 log(
                     f"Held lock for {self._mutex_name} during {elapsed:.3f} s",
                     LogLevel.WARN,
