@@ -373,11 +373,11 @@ class CacheFileWithCouchbaseFallbackStrategy:
         This will also set the manifest in the remote cache.
         '''
         size = 0
-        if location | Location.LOCAL:
+        if location & Location.LOCAL:
             with self.local_cache.manifest_lock_for(manifest_hash):
                 size = self.local_cache.set_manifest(manifest_hash, manifest, location)
             
-        if location | Location.REMOTE:
+        if location & Location.REMOTE:
             self.remote_cache.set_manifest(manifest_hash, manifest)
 
         return size
@@ -389,7 +389,7 @@ class CacheFileWithCouchbaseFallbackStrategy:
         If the manifest is in the remote cache, it will be copied into the local cache.
         '''
         if local := self.local_cache.get_manifest(manifest_hash):
-            log(f"{self} local manifest hit for {manifest_hash}")
+            log(f"Local manifest hit for {manifest_hash}")
             return local
 
         if not skip_remote:
@@ -402,7 +402,7 @@ class CacheFileWithCouchbaseFallbackStrategy:
                         size)
 
                 log(
-                    f"{self} remote manifest hit for {manifest_hash} writing into local cache"
+                    f"Remote manifest hit for {manifest_hash}, writing into local cache"
                 )
                 return remote, size
 
