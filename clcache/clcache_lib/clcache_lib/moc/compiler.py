@@ -643,7 +643,7 @@ def _process_cache_hit(cache: Cache,
 
                     elif m := re_include.match(line):
                         include_path = m[1].decode()
-                        expanded_path = expand_path(include_path)
+                        expanded_path = expand_path(include_path).resolve()
                         # calculate relative path from output file to include file
                         with contextlib.suppress(ValueError):
                             expanded_path = Path(os.path.relpath(expanded_path, output_file.parent))
