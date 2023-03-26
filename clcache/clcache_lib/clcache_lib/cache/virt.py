@@ -181,6 +181,12 @@ def subst_basedir_with_placeholder(src_code: bytes, src_dir: Path) -> bytes:
     return b'\n'.join(result)
 
 
+subst_basedir_with_placeholder.INCLUDE_RE = \
+    re.compile(br"^\s*#\s*include\s*(?:[\"<])(.*)[\">]", re.IGNORECASE)
+subst_basedir_with_placeholder.COMMENT_RE = \
+    re.compile(br"^\s*\/\/\s*([^<>|?*\"]+)$", re.IGNORECASE)
+
+
 def set_llvm_dir(compiler_path: Path) -> None:
     global LLVM_DIR_STR
     global LLVM_DIR_SHORT_STR
@@ -196,12 +202,6 @@ def set_llvm_dir(compiler_path: Path) -> None:
     short_path = get_short_path_name(compiler_path)
     if match := re_llvm_dir.match(str(short_path)):
         LLVM_DIR_SHORT_STR = match[1].lower()
-
-
-subst_basedir_with_placeholder.INCLUDE_RE = \
-    re.compile(br"^\s*#\s*include\s*(?:[\"<])(.*)[\">]", re.IGNORECASE)
-subst_basedir_with_placeholder.COMMENT_RE = \
-    re.compile(br"^\s*\/\/\s*([^<>|?*\"]+)$", re.IGNORECASE)
 
 
 @functools.singledispatch

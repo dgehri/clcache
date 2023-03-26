@@ -10,7 +10,7 @@ from pathlib import Path
 from tempfile import TemporaryFile
 from typing import BinaryIO, Dict, List, Optional, Tuple
 
-from ..cache.cache import Cache, ensure_artifacts_exist
+from ..cache.cache import Cache, Location, ensure_artifacts_exist
 from ..cache.ex import CompilerFailedException, IncludeNotFoundException
 from ..cache.file_cache import Manifest, ManifestRepository, copy_from_cache
 from ..cache.hash import get_compiler_hash, get_file_hash
@@ -475,8 +475,12 @@ def _process(cache: Cache,
                         old_size = 0
 
                     manifest.add_entry(entry)
-                    new_size = cache.set_manifest(manifest_hash, manifest)
-                    return new_size - old_size
+                    new_size = cache.set_manifest(
+                        manifest_hash, manifest, location=Location.LOCAL)
+
+                # Setting remote manifest outside lock
+                cache.set_manifest(manifest_hash, manifest, Location.REMOTE)
+                return new_size - old_size
 
             return ensure_artifacts_exist(
                 cache,
@@ -494,8 +498,7 @@ def _canonicalize_moc_output_file(file_in: BinaryIO,
                                   file_out: BinaryIO,
                                   output_file: Path):
     '''
-    Canonicalizes the include statements in the MOC file (output_file),
-    and writes the result to a temporary file.
+    Canonicalizes the include statements in the MOC file (output_file)
     '''
     re_include = re.compile(rb"^#include\s+\"(.*)\"")
     filter_line = True
@@ -628,6 +631,9 @@ def _process_cache_hit(cache: Cache,
         assert cached_artifacts is not None
 
         def copy_filter(file_in, file_out):
+            '''
+            Expands the include statements in the MOC file
+            '''
             re_include = re.compile(rb"^#include\s+\"(.*)\"")
             filter_line = True
             for line in line_iter_b(file_in.read()):
@@ -638,6 +644,9 @@ def _process_cache_hit(cache: Cache,
                     elif m := re_include.match(line):
                         include_path = m[1].decode()
                         expanded_path = expand_path(include_path)
+                        # calculate relative path from output file to include file
+                        with contextlib.suppress(ValueError):
+                            expanded_path = Path(os.path.relpath(expanded_path, output_file.parent))
                         line = (
                             line[: m.start(1)]
                             + expanded_path.as_posix().encode()

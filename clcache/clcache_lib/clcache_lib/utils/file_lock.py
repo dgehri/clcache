@@ -20,6 +20,7 @@ class FileLock:
         self._mutex = None
         self._timeout_ms = timeout_ms
         self._t0 = None
+        self._acquired = False
 
     def create_mutex(self):
         self._mutex = windll.kernel32.CreateMutexW(
@@ -38,7 +39,7 @@ class FileLock:
             windll.kernel32.CloseHandle(self._mutex)
 
     def acquire(self):
-        self._t0 = datetime.datetime.now()
+        t0 = datetime.datetime.now()
         if not self._mutex:
             self.create_mutex()
         result = windll.kernel32.WaitForSingleObject(
@@ -56,8 +57,11 @@ class FileLock:
             log(error_string, LogLevel.ERROR)
             raise FileLockException(error_string)
 
-        elapsed = (datetime.datetime.now() - self._t0).total_seconds()
-        if elapsed > 1:
+        self._acquired = True
+        self._t0 = t0
+        
+        elapsed = (datetime.datetime.now() - t0).total_seconds()
+        if elapsed > 2:
             from ..utils.logging import LogLevel, log
             log(
                 f"Waited for lock {self._mutex_name} during {elapsed:.1f} s",
@@ -65,15 +69,19 @@ class FileLock:
             )
 
     def release(self):
-        windll.kernel32.ReleaseMutex(self._mutex)
-        if self._t0:
-            elapsed = (datetime.datetime.now() - self._t0).total_seconds()
-            if elapsed > 1:
-                from ..utils.logging import LogLevel, log
-                log(
-                    f"Held lock for {self._mutex_name} during {elapsed:.1f} s",
-                    LogLevel.WARN,
-                )
+        if self._acquired:
+            self._acquired = False
+            t0 = self._t0
+            windll.kernel32.ReleaseMutex(self._mutex)
+            
+            if t0:
+                elapsed = (datetime.datetime.now() - t0).total_seconds()
+                if elapsed > 2:
+                    from ..utils.logging import LogLevel, log
+                    log(
+                        f"Held lock for {self._mutex_name} during {elapsed:.1f} s",
+                        LogLevel.WARN,
+                    )
 
     @staticmethod
     def for_path(path: Path):

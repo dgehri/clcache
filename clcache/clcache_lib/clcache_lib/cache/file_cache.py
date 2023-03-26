@@ -113,11 +113,13 @@ class ManifestSection:
 
                 # Return the size of the manifest file (warning: don't move inside the with block!)
                 return manifest_path.stat().st_size
-            except Exception as e:
-                log(
-                    f"Failed to write manifest file {manifest_path}: {traceback.format_exc()} (retrying)")
+            except Exception:
                 if i == 9:
+                    log(
+                        f"Failed to write manifest file {manifest_path}: {traceback.format_exc()}", LogLevel.ERROR)
                     raise
+                log(
+                    f"Failed to write manifest file {manifest_path}: {traceback.format_exc()} (retrying)", LogLevel.WARN)
                 time.sleep(0.5)
         assert False, "unreachable"
 
@@ -548,7 +550,7 @@ class CacheFileStrategy:
         '''
         return self.compiler_artifacts_repository.section(cachekey).has_entry(cachekey)
 
-    def set_manifest(self, manifest_hash: str, manifest: Manifest) -> int:
+    def set_manifest(self, manifest_hash: str, manifest: Manifest, _) -> int:
         return self.manifests_repository.section(manifest_hash).set_manifest(
             manifest_hash, manifest
         )

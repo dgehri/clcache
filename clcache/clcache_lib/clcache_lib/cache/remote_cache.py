@@ -2,6 +2,7 @@ import contextlib
 import hashlib
 import re
 from typing import BinaryIO, Dict
+from clcache_lib.cache.cache import Location
 
 from couchbase.auth import PasswordAuthenticator
 from couchbase.cluster import Bucket, Cluster
@@ -262,7 +263,7 @@ class CacheCouchbaseStrategy:
         try:
                 # First fetch existing manifest
             if remote_manifest := self.get_manifest(key):
-                    # Merge the manifests
+                # Merge the manifests
                 entries = list(set(remote_manifest.entries() + manifest.entries()))
                 manifest = Manifest(entries)
 
@@ -362,15 +363,22 @@ class CacheFileWithCouchbaseFallbackStrategy:
                 key, artifacts, compressed_payload_path)
         return size
 
-    def set_manifest(self, manifest_hash: str, manifest: Manifest) -> int:
+    def set_manifest(self, 
+                     manifest_hash: str, 
+                     manifest: Manifest, 
+                     location = Location.LOCAL_AND_REMOTE) -> int:
         '''
         Sets the manifest in the cache.
 
         This will also set the manifest in the remote cache.
         '''
-        with self.local_cache.manifest_lock_for(manifest_hash):
-            size = self.local_cache.set_manifest(manifest_hash, manifest)
-        self.remote_cache.set_manifest(manifest_hash, manifest)
+        size = 0
+        if location | Location.LOCAL:
+            with self.local_cache.manifest_lock_for(manifest_hash):
+                size = self.local_cache.set_manifest(manifest_hash, manifest, location)
+            
+        if location | Location.REMOTE:
+            self.remote_cache.set_manifest(manifest_hash, manifest)
 
         return size
 
@@ -387,7 +395,7 @@ class CacheFileWithCouchbaseFallbackStrategy:
         if not skip_remote:
             if remote := self.remote_cache.get_manifest(manifest_hash):
                 with self.local_cache.manifest_lock_for(manifest_hash):
-                    size = self.local_cache.set_manifest(manifest_hash, remote)
+                    size = self.local_cache.set_manifest(manifest_hash, remote, Location.LOCAL)
 
                     # record the size of the manifest in the stats
                     self.local_cache.current_stats.register_cache_entry_size(

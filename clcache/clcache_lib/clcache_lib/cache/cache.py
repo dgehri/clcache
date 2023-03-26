@@ -1,4 +1,5 @@
 import contextlib
+from enum import IntEnum
 import os
 from pathlib import Path
 from typing import Callable, Optional, Tuple, BinaryIO
@@ -8,7 +9,11 @@ from ..utils.logging import LogLevel, log
 from .file_cache import CacheFileStrategy, CompilerArtifacts
 from .stats import CacheStats, MissReason, PersistentStats, Stats
 
-
+class Location(IntEnum):
+    LOCAL = 1,
+    REMOTE = 2,
+    LOCAL_AND_REMOTE = 3
+    
 class Cache:
     def __init__(self, cache_dir: Optional[Path] = None):
         if url := os.environ.get("CLCACHE_COUCHBASE"):
@@ -81,8 +86,8 @@ class Cache:
         '''
         return self.strategy.has_entry(cachekey)
 
-    def set_manifest(self, manifest_hash, manifest):
-        return self.strategy.set_manifest(manifest_hash, manifest)
+    def set_manifest(self, manifest_hash, manifest, location = Location.LOCAL_AND_REMOTE):
+        return self.strategy.set_manifest(manifest_hash, manifest, location)
 
     def get_manifest(self, manifest_hash: str, skip_remote: bool=False):
         return self.strategy.get_manifest(manifest_hash, skip_remote)

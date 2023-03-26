@@ -693,15 +693,19 @@ def _process(cache: Cache,
 
             def add_manifest() -> int:
                 with cache.manifest_lock_for(manifest_hash):
-                    if manifest_info := cache.get_manifest(manifest_hash):
+                    if manifest_info := cache.get_manifest(manifest_hash, skip_remote=True):
                         manifest, old_size = manifest_info
                     else:
                         manifest = Manifest()
                         old_size = 0
 
                     manifest.add_entry(entry)
-                    new_size = cache.set_manifest(manifest_hash, manifest)
-                    return new_size - old_size
+                    new_size = cache.set_manifest(
+                        manifest_hash, manifest, Location.LOCAL)
+
+                # Setting remote manifest outside lock
+                cache.set_manifest(manifest_hash, manifest, Location.REMOTE)
+                return new_size - old_size
 
             return ensure_artifacts_exist(
                 cache,
