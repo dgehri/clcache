@@ -58,14 +58,14 @@ class FileLock:
             raise FileLockException(error_string)
 
         self._acquired = True
-        self._t0 = t0
+        self._t0 = datetime.datetime.now()
         
-        elapsed = (datetime.datetime.now() - t0).total_seconds()
+        elapsed = (self._t0  - t0).total_seconds()
         if elapsed > 2:
             from ..utils.logging import LogLevel, log
             log(
                 f"Waited for lock {self._mutex_name} during {elapsed:.1f} s",
-                LogLevel.WARN,
+                LogLevel.TRACE,
             )
 
     def release(self):
@@ -80,7 +80,7 @@ class FileLock:
                     from ..utils.logging import LogLevel, log
                     log(
                         f"Held lock for {self._mutex_name} during {elapsed:.1f} s",
-                        LogLevel.WARN,
+                        LogLevel.TRACE,
                     )
 
     @staticmethod

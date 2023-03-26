@@ -650,7 +650,7 @@ def _process(cache: Cache,
 
         # If we get here, we have a cache miss and we'll need to invoke the real compiler
         if manifest_hit:
-            log("Manifest hit, but no object file found in cache")
+            log("Manifest entry hit, but no object file found in cache")
             # Got a manifest, but no object => invoke real compiler
             compiler_result = _capture_real_compiler(compiler_path, cmdline)
 
@@ -667,7 +667,7 @@ def _process(cache: Cache,
                     canonicalize_stderr=lambda s: canonicalize_compile_output(
                         s, StdStream.STDERR))
         else:
-            log("Manifest miss, invoking real compiler")
+            log("Manifest entry miss, invoking real compiler")
             # Also generate manifest
             strip_includes = False
             if "/showIncludes" not in cmdline:
