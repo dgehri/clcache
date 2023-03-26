@@ -60,17 +60,45 @@ def get_file_hashes(path_list: List[Path]) -> List[str]:
     Returns:
         The hashes of the files.
     '''
-
     if server_timeout_secs := _get_sever_timeout_seconds():
         try:
-            if not spawn_server(server_timeout_secs):
-                raise OSError("Server didn't start in time")
-
-            return PipeServer.get_file_hashes(path_list)
+            return _get_file_hashes_from_server(server_timeout_secs, path_list)
         except Exception as e:
-            log(f"Failed to use server: {traceback.format_exc()}", LogLevel.ERROR)
+            log(f"Failed to use server: {traceback.format_exc()}",
+                LogLevel.ERROR)
 
     return [get_file_hash(path) for path in path_list]
+
+
+def _get_file_hashes_from_server(server_timeout_secs, path_list):
+    if not spawn_server(server_timeout_secs):
+        raise OSError("Server didn't start in time")
+
+    # Split path_list into paths in build dir and paths not in build dir,
+    # and remember original index into original list
+    build_dir_paths = []
+    other_paths = []
+    is_build_dir = []
+    for path in path_list:
+        if is_in_build_dir(path):
+            build_dir_paths.append(path)
+            is_build_dir.append(True)
+        else:
+            other_paths.append(path)
+            is_build_dir.append(False)
+
+    other_hashes = PipeServer.get_file_hashes(other_paths)
+    build_dir_hashes = [get_file_hash(path)
+                        for path in build_dir_paths]
+
+    # Recombine hashes in original order
+    hashes = []
+    for i in range(len(path_list)):
+        if is_build_dir[i]:
+            hashes.append(build_dir_hashes.pop(0))
+        else:
+            hashes.append(other_hashes.pop(0))
+    return hashes
 
 
 @functools.cache
