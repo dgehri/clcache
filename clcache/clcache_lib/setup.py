@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="clcache-lib",
-    version="4.4.3ai",
+    version="4.4.3aj",
     author="Various",
     author_email="Various",
     packages=find_packages(exclude=('clcache_lib',)),

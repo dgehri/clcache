@@ -189,7 +189,7 @@ class CacheCouchbaseStrategy:
                     self._set_entry_from_compressed_file(
                         obj_file, key, artifacts)
             except Exception:
-                log(f"Could not set {key} in Couchbase {self.url}: {traceback.print_exc()}",
+                log(f"Could not set {key} in remote cache: {traceback.format_exc()}",
                     level=LogLevel.WARN)
 
     def _set_entry_from_compressed_file(self,
@@ -259,12 +259,13 @@ class CacheCouchbaseStrategy:
         '''
         if self.is_bad:
             return
-        
+
         try:
-                # First fetch existing manifest
+            # First fetch existing manifest
             if remote_manifest := self.get_manifest(key):
                 # Merge the manifests
-                entries = list(set(remote_manifest.entries() + manifest.entries()))
+                entries = list(
+                    set(remote_manifest.entries() + manifest.entries()))
                 manifest = Manifest(entries)
 
             entries = [e._asdict() for e in manifest.entries()]
@@ -273,7 +274,7 @@ class CacheCouchbaseStrategy:
                 coll_manifests.upsert(key, json_object)
                 coll_manifests.touch(key, COUCHBASE_EXPIRATION)
         except Exception:
-            log(f"Could not set {key} in Couchbase {self.url}: {traceback.print_exc()}",
+            log(f"Could not set {key} in remote cache: {traceback.format_exc()}",
                 level=LogLevel.WARN)
 
     @functools.cache
@@ -363,10 +364,10 @@ class CacheFileWithCouchbaseFallbackStrategy:
                 key, artifacts, compressed_payload_path)
         return size
 
-    def set_manifest(self, 
-                     manifest_hash: str, 
-                     manifest: Manifest, 
-                     location = Location.LOCAL_AND_REMOTE) -> int:
+    def set_manifest(self,
+                     manifest_hash: str,
+                     manifest: Manifest,
+                     location=Location.LOCAL_AND_REMOTE) -> int:
         '''
         Sets the manifest in the cache.
 
@@ -375,8 +376,9 @@ class CacheFileWithCouchbaseFallbackStrategy:
         size = 0
         if location & Location.LOCAL:
             with self.local_cache.manifest_lock_for(manifest_hash):
-                size = self.local_cache.set_manifest(manifest_hash, manifest, location)
-            
+                size = self.local_cache.set_manifest(
+                    manifest_hash, manifest, location)
+
         if location & Location.REMOTE:
             self.remote_cache.set_manifest(manifest_hash, manifest)
 
@@ -395,7 +397,8 @@ class CacheFileWithCouchbaseFallbackStrategy:
         if not skip_remote:
             if remote := self.remote_cache.get_manifest(manifest_hash):
                 with self.local_cache.manifest_lock_for(manifest_hash):
-                    size = self.local_cache.set_manifest(manifest_hash, remote, Location.LOCAL)
+                    size = self.local_cache.set_manifest(
+                        manifest_hash, remote, Location.LOCAL)
 
                     # record the size of the manifest in the stats
                     self.local_cache.current_stats.register_cache_entry_size(
