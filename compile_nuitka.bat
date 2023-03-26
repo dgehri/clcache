@@ -13,8 +13,8 @@ set CONAN_REVISIONS_ENABLED=1
 conan export-pkg conanfile.py --force
 
 set USER=dgehri
-set CHANNEL=dev
-set VERSION=4.4.3ak
+set CHANNEL=stable
+set VERSION=4.4.3
 
 conan upload clcache/%VERSION%@%USER%/%CHANNEL% --all -r globus-conan-local
 
