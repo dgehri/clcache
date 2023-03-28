@@ -8,11 +8,11 @@ from couchbase.auth import PasswordAuthenticator
 from couchbase.cluster import Bucket, Cluster
 from couchbase.collection import Collection
 from couchbase.options import (ClusterOptions, ClusterTimeoutOptions,
-                               GetAndTouchOptions, UpsertOptions)
+                               GetAndTouchOptions, UpsertOptions, RemoveOptions, TouchOptions)
 
 from ..cache.stats import MissReason
 from ..config import (COUCHBASE_CONNECT_TIMEOUT, COUCHBASE_EXPIRATION,
-                      COUCHBASE_GET_TIMEOUT)
+                      COUCHBASE_ACCESS_TIMEOUT)
 from .couchbase_ex import RawBinaryTranscoderEx
 from .file_cache import *
 
@@ -29,7 +29,7 @@ class CacheCouchbaseStrategy:
         self._coll_manifests = None
         self._coll_objects = None
         self._coll_object_data = None
-        (self.user, self.pwd, self.host) = CacheCouchbaseStrategy.splitHost(url)
+        (self.user, self.pwd, self.host) = CacheCouchbaseStrategy._split_host(url)
 
         self.opts = ClusterOptions(
             authenticator=PasswordAuthenticator(self.user, self.pwd),
@@ -65,7 +65,7 @@ class CacheCouchbaseStrategy:
             if not self._coll_manifests:
                 self._coll_manifests = self.bucket.collection("manifests")
             return self._coll_manifests
-        except Exception as e:
+        except Exception:
             self.is_bad = True
             return None
 
@@ -75,7 +75,7 @@ class CacheCouchbaseStrategy:
             if not self._coll_objects:
                 self._coll_objects = self.bucket.collection("objects")
             return self._coll_objects
-        except Exception as e:
+        except Exception:
             self.is_bad = True
             return None
 
@@ -85,12 +85,12 @@ class CacheCouchbaseStrategy:
             if not self._coll_object_data:
                 self._coll_object_data = self.bucket.collection("objects_data")
             return self._coll_object_data
-        except Exception as e:
+        except Exception:
             self.is_bad = True
             return None
 
     @staticmethod
-    def splitHost(host: str) -> Tuple[str, str, str]:
+    def _split_host(host: str) -> Tuple[str, str, str]:
         m = re.match(r"^(?:couchbase://)?([^:]+):([^@]+)@(\S+)$", host)
         if m is None:
             raise ValueError
@@ -100,27 +100,26 @@ class CacheCouchbaseStrategy:
     def __str__(self):
         return f"Remote Couchbase {self.host}"
 
-    def _fetchEntry(self, key: str) -> Optional[bool]:
+    def _fetch_entry(self, key: str) -> Optional[bool]:
         if self.is_bad:
             return None
         try:
-            return self._fetchEntryImpl(key)
+            return self._fetch_entry_impl(key)
         except Exception:
             self.cache[key] = None
             return None
 
-    def _fetchEntryImpl(self, key: str) -> Optional[bool]:
+    def _fetch_entry_impl(self, key: str) -> Optional[bool]:
         '''Fetches an entry from the cache and stores it in self.cache.'''
-        hasher = HashAlgorithm()
-        coll_o = self.coll_objects
-        if not coll_o:
+        if not (coll_o := self.coll_objects):
             return None
 
-        coll_data = self.coll_object_data
-        if not coll_data:
+        if not (coll_data := self.coll_object_data):
             return None
 
-        res = coll_o.get_and_touch(key, COUCHBASE_EXPIRATION)
+        res = coll_o.get_and_touch(key, COUCHBASE_EXPIRATION,
+                                   GetAndTouchOptions(
+                                       timeout=COUCHBASE_ACCESS_TIMEOUT))  # type: ignore
         payload = res.content_as[dict]
         if "chunk_count" not in payload:
             return None
@@ -133,12 +132,13 @@ class CacheCouchbaseStrategy:
 
         chunk_count = payload["chunk_count"]
         obj_data = []
+        hasher = HashAlgorithm()
         for i in range(1, chunk_count + 1):
             res = coll_data.get_and_touch(
                 f"{key}-{i}",
                 COUCHBASE_EXPIRATION,
                 GetAndTouchOptions(
-                    transcoder=RawBinaryTranscoderEx(), timeout=COUCHBASE_GET_TIMEOUT
+                    transcoder=RawBinaryTranscoderEx(), timeout=COUCHBASE_ACCESS_TIMEOUT
                 ),  # type: ignore
             )
             obj_data.append(res.value)
@@ -147,7 +147,8 @@ class CacheCouchbaseStrategy:
         if payload["md5"] != hasher.hexdigest():
             coll_o.remove(key)
             for i in range(1, chunk_count + 1):
-                coll_data.remove(f"{key}-{i}")
+                coll_data.remove(f"{key}-{i}",
+                                 RemoveOptions(timeout=COUCHBASE_ACCESS_TIMEOUT))  # type: ignore
 
             return None
 
@@ -163,14 +164,14 @@ class CacheCouchbaseStrategy:
             A tuple of (has entry, is local cache entry).
         '''
         in_cache = key in self.cache and self.cache[key] is not None
-        return in_cache or self._fetchEntry(key) is not None
+        return in_cache or self._fetch_entry(key) is not None
 
-    def getEntryAsPayload(self, key: str) -> Optional[dict]:
+    def get_entry_as_payload(self, key: str) -> Optional[dict]:
         '''
         Returns the entry as a dict, or None if it is not in the cache.
         '''
         if key not in self.cache:
-            self._fetchEntry(key)
+            self._fetch_entry(key)
         return None if self.cache[key] is None else self.cache[key]
 
     def set_entry_from_compressed(self,
@@ -189,8 +190,8 @@ class CacheCouchbaseStrategy:
                     self._set_entry_from_compressed_file(
                         obj_file, key, artifacts)
             except Exception:
-                log(f"Could not set {key} in remote cache: {traceback.format_exc()}",
-                    level=LogLevel.WARN)
+                log(f"Could not set {key} in remote cache",
+                    level=LogLevel.TRACE)
 
     def _set_entry_from_compressed_file(self,
                                         obj_file: BinaryIO,
@@ -202,13 +203,11 @@ class CacheCouchbaseStrategy:
         Returns:
             The number of bytes stored in the cache. 0 if the entry was not stored.
         '''
-        coll_o = self.coll_objects
-        if not coll_o:
-            return
+        if not (coll_o := self.coll_objects):
+            return None
 
-        coll_data = self.coll_object_data
-        if not coll_data:
-            return
+        if not (coll_data := self.coll_object_data):
+            return None
 
         obj_data = obj_file.read()
         obj_view = memoryview(obj_data)
@@ -226,13 +225,15 @@ class CacheCouchbaseStrategy:
             res = coll_data.upsert(
                 sub_key,
                 obj_view[s:e],  # type: ignore
-                UpsertOptions(\
-                    transcoder=RawBinaryTranscoderEx())  # type: ignore
+                UpsertOptions(
+                    transcoder=RawBinaryTranscoderEx(),
+                    timeout=COUCHBASE_ACCESS_TIMEOUT)  # type: ignore
                 ,
             )
             if not res.success:
                 return
-            coll_data.touch(sub_key, COUCHBASE_EXPIRATION)
+            coll_data.touch(sub_key, COUCHBASE_EXPIRATION, TouchOptions(
+                timeout=COUCHBASE_ACCESS_TIMEOUT))  # type: ignore
 
         payload = {
             "stdout": artifacts.stdout,
@@ -240,8 +241,9 @@ class CacheCouchbaseStrategy:
             "chunk_count": i,
             "md5": hasher.hexdigest(),
         }
-        coll_o.upsert(key, payload)
-        coll_o.touch(key, COUCHBASE_EXPIRATION)
+        coll_o.upsert(key, payload, UpsertOptions(
+            timeout=COUCHBASE_ACCESS_TIMEOUT))  # type: ignore
+        coll_o.touch(key, COUCHBASE_EXPIRATION, timeout=COUCHBASE_ACCESS_TIMEOUT)  # type: ignore
 
     def set_manifest(self, key: str, manifest: Manifest):
         '''
@@ -271,11 +273,11 @@ class CacheCouchbaseStrategy:
             entries = [e._asdict() for e in manifest.entries()]
             json_object = {"entries": entries}
             if coll_manifests := self.coll_manifests:
-                coll_manifests.upsert(key, json_object)
+                coll_manifests.upsert(key, json_object, UpsertOptions(
+                    timeout=COUCHBASE_ACCESS_TIMEOUT))  # type: ignore
                 coll_manifests.touch(key, COUCHBASE_EXPIRATION)
         except Exception:
-            log(f"Could not set {key} in remote cache: {traceback.format_exc()}",
-                level=LogLevel.WARN)
+            log(f"Could not set {key} in remote cache", level=LogLevel.TRACE)
 
     @functools.cache
     def get_manifest(self, key: str) -> Optional[Manifest]:
@@ -283,10 +285,12 @@ class CacheCouchbaseStrategy:
             return None
 
         try:
-            coll_manifests = self.coll_manifests
-            if not coll_manifests:
+            if not (coll_manifests := self.coll_manifests):
                 return None
-            res = coll_manifests.get_and_touch(key, COUCHBASE_EXPIRATION)
+
+            res = coll_manifests.get_and_touch(
+                key, COUCHBASE_EXPIRATION,
+                GetAndTouchOptions(timeout=COUCHBASE_ACCESS_TIMEOUT))  # type: ignore
             return Manifest(
                 [
                     ManifestEntry(
@@ -337,8 +341,8 @@ class CacheFileWithCouchbaseFallbackStrategy:
             log(f"Fetching object {key} from local cache")
             return self.local_cache.get_entry(key)
 
-        if payload := self.remote_cache.getEntryAsPayload(key):
-            log(f"{self} remote cache hit for {key} dumping into local cache")
+        if payload := self.remote_cache.get_entry_as_payload(key):
+            log(f"Dumping remote cache hit for {key} into local cache")
             size = self.local_cache.set_entry_from_payload(key, payload)
 
             # record the hit, and size of the object in the stats

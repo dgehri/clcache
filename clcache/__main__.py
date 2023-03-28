@@ -265,13 +265,13 @@ if __name__ == "__main__":
 
         sys.exit(main())
     except Exception as e:
-        # Print exception with full traceback
+        # Log exception with full traceback
         import traceback
-        traceback.print_exc()
-
-        # Also try to log
         log("Exception: {0!s}".format(
             traceback.format_exc()), level=LogLevel.ERROR)
+        flush_logger()
+        
+        traceback.print_exc()
         sys.exit(1)
     finally:
         flush_logger()
