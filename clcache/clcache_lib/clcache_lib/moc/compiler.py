@@ -24,7 +24,8 @@ from ..utils.args import (ArgumentQtLong, ArgumentQtLongWithParam,
 from ..utils.errors import *
 from ..utils.file_lock import FileLock
 from ..utils.logging import LogLevel, log
-from ..utils.util import line_iter_b, print_stdout_and_stderr
+from ..utils.util import (correct_case_path, line_iter_b,
+                          print_stdout_and_stderr)
 
 
 class MocCommandLineAnalyzer(CommandLineAnalyzer):
@@ -113,7 +114,7 @@ class MocCommandLineAnalyzer(CommandLineAnalyzer):
             cmdline: The command line to analyze.
 
         Returns:
-            Input header files and output moc file.            
+            Input header files and output moc file.
         '''
 
         options, input_files = self.parse_args_and_input_files(
@@ -502,24 +503,23 @@ def _canonicalize_moc_output_file(file_in: BinaryIO,
     '''
     re_include = re.compile(rb"^#include\s+\"(.*)\"")
     filter_line = True
+    stop_line = "QT_BEGIN_MOC_NAMESPACE".encode()
     for line in line_iter_b(file_in.read()):
         if filter_line:
-            if line == "QT_BEGIN_MOC_NAMESPACE".encode():
+            if line.rstrip() == stop_line:
                 filter_line = False
             elif m := re_include.match(line):
                 include_path = Path(m[1].decode())
                 if not include_path.is_absolute():
                     include_path = output_file.parent / include_path
 
-                collapsed_path = canonicalize_path(
+                canonicalized_path = canonicalize_path(
                     include_path.resolve().absolute())
-                line = (
-                    line[: m.start(1)]
-                    + collapsed_path.encode()
-                ) + line[m.end(1):]
+                line = line[:m.start(1)] + \
+                    canonicalized_path.encode() + line[m.end(1):]
 
         # write to output file
-        file_out.write(line + b"\r\n")
+        file_out.write(line)
 
 
 def _get_manifest_hash(compiler_path: Path,
@@ -636,24 +636,26 @@ def _process_cache_hit(cache: Cache,
             '''
             re_include = re.compile(rb"^#include\s+\"(.*)\"")
             filter_line = True
+            stop_line = "QT_BEGIN_MOC_NAMESPACE".encode()
             for line in line_iter_b(file_in.read()):
                 if filter_line:
-                    if line == "QT_BEGIN_MOC_NAMESPACE".encode():
+                    if line.rstrip() == stop_line:
                         filter_line = False
-
                     elif m := re_include.match(line):
                         include_path = m[1].decode()
-                        expanded_path = expand_path(include_path).resolve()
+                        expanded_path = expand_path(include_path)
                         # calculate relative path from output file to include file
-                        with contextlib.suppress(ValueError):
-                            expanded_path = Path(os.path.relpath(expanded_path, output_file.parent))
-                        line = (
-                            line[: m.start(1)]
-                            + expanded_path.as_posix().encode()
-                        ) + line[m.end(1):]
+                        with contextlib.suppress(ValueError, OSError):
+                            # get correct case of include file
+                            expanded_path = correct_case_path(expanded_path)
+                            expanded_path = Path(os.path.relpath(
+                                expanded_path, output_file.parent))
+
+                        line = line[:m.start(1)] + \
+                            expanded_path.as_posix().encode() + line[m.end(1):]
 
                 # write to output file
-                file_out.write(line + b"\r\n")
+                file_out.write(line)
 
         copy_from_cache(cached_artifacts.payload_path,
                         output_file, copy_filter)

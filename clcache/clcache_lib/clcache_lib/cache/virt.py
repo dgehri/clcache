@@ -18,6 +18,7 @@ BUILDDIR_REPLACEMENT: str = "<BUILD_DIR>"
 CONANDIR_REPLACEMENT: str = "<CONAN_USER_HOME>"
 QTDIR_REPLACEMENT: str = "<QT_DIR>"
 LLVM_REPLACEMENT: str = "<LLVM_DIR>"
+MAX_PATH = 260
 
 # LLVM folder path, represented <LLVM> placeholder
 LLVM_DIR_STR: Optional[str] = None
@@ -36,12 +37,13 @@ def expand_compile_output(compiler_output: str, stream: StdStream) -> str:
     for line in line_iter(compiler_output):
         if match := regex.match(line):
             file_path = expand_path(match[2])
+            if len(str(file_path)) > MAX_PATH - 10:
+                file_path = os.path.normpath(file_path)
             line = f"{match[1]}{file_path}{line[match.end(2):]}"
 
         lines.append(line)
 
-    lines.append("")
-    return "\r\n".join(lines)
+    return "".join(lines)
 
 
 def canonicalize_compile_output(compiler_output: str, stream: StdStream) -> str:
@@ -57,8 +59,7 @@ def canonicalize_compile_output(compiler_output: str, stream: StdStream) -> str:
 
         lines.append(line)
 
-    lines.append("")
-    return "\r\n".join(lines)
+    return "".join(lines)
 
 
 def _path_starts_with_placeholder(path: str, placeholder: str) -> bool:
@@ -150,41 +151,41 @@ def subst_basedir_with_placeholder(src_code: bytes, src_dir: Path) -> bytes:
     """
     result: List[bytes] = []
 
-    base_dir_replacement = Path(BASEDIR_REPLACEMENT)
-
     # iterate over src_code line by line
     line: bytes
     for line in line_iter_b(src_code):
-        with contextlib.suppress(UnicodeDecodeError, ValueError):
-            include_path: Optional[Path] = None
+        with contextlib.suppress(UnicodeDecodeError, ValueError, OSError):
+            path_str: Optional[str] = None
             if m := subst_basedir_with_placeholder.INCLUDE_RE.match(line):
-                include_path = Path(m[1].decode())
+                path_str = m[1].decode()
             elif m := subst_basedir_with_placeholder.COMMENT_RE.match(line):
-                include_path = Path(m[1].decode())
+                path_str = m[1].decode()
 
-            if include_path:
-                # test if include path is relative
-                if not include_path.is_absolute():
-                    include_path = Path(
-                        os.path.normpath(src_dir / include_path))
+            if path_str:
+                if os.path.isabs(path_str):
+                    path = Path(os.path.normpath(path_str))
+                else:
+                    path = Path(os.path.normpath(src_dir / path_str))
 
                 # check if result in base dir
-                if BASEDIR_STR and _is_in_base_dir(include_path):
+                if path.is_file() and BASEDIR_STR and _is_in_base_dir(path):
                     # get relative path to base dir
-                    include_path_rel = include_path.relative_to(BASEDIR_STR)
+                    include_path_rel = path.relative_to(BASEDIR_STR)
 
                     # replace with placeholder
-                    line = line.replace(
-                        m[1], (base_dir_replacement / include_path_rel).as_posix().encode(), 1)
+                    canonicalized_path = f"{BASEDIR_REPLACEMENT}/{include_path_rel.as_posix()}"
+
+                    line = line[:m.start(
+                        1)] + canonicalized_path.encode() + line[m.end(1):]
         result.append(line)
 
-    return b'\n'.join(result)
+    return b''.join(result)
 
 
 subst_basedir_with_placeholder.INCLUDE_RE = \
-    re.compile(br"^\s*#\s*include\s*(?:[\"<])(.*)[\">]", re.IGNORECASE)
+    re.compile(br"^\s*#\s*include\s*\"((?:[A-Z]:)?[^:<>|?*\"]+)\"", re.IGNORECASE)
 subst_basedir_with_placeholder.COMMENT_RE = \
-    re.compile(br"^\s*\/\/\s*([^<>|?*\"]+)$", re.IGNORECASE)
+    re.compile(br"^\s*\/\/\s*((?:[A-Z]:)?[^:<>|?*\"]+?)\r?$", re.IGNORECASE)
 
 
 def set_llvm_dir(compiler_path: Path) -> None:
@@ -329,7 +330,7 @@ BUILDDIR_ESC: str = BUILDDIR_STR.replace("\\", "/")
 RE_ENV: re.Pattern[str] = re.compile(r"^<env:([^>]+)>", flags=re.IGNORECASE)
 
 RE_STDOUT: re.Pattern = re.compile(
-    r"^(\w+:\s[\s\w]+:\s+)(\S.*)$", re.IGNORECASE)
+    r"^(\w+:\s[\s\w]+:\s+)(\S.*?)\r?$", re.IGNORECASE)
 
 RE_STDERR: re.Pattern = re.compile(
     r"^(In file included from\s+|)"  # optional prefix

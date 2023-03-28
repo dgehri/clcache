@@ -1,12 +1,13 @@
 
 from datetime import timedelta
+import os
 
-VERSION = "4.4.3-dgehri"
+VERSION = "4.4.4h-dgehri"
 CACHE_VERSION = "9"
 
 COUCHBASE_EXPIRATION = timedelta(days=3)
-COUCHBASE_CONNECT_TIMEOUT = timedelta(seconds=1)
-COUCHBASE_GET_TIMEOUT = timedelta(seconds=10)
+COUCHBASE_CONNECT_TIMEOUT = timedelta(seconds=int(os.environ.get("CLCACHE_COUCHBASE_CONNECT_TIMEOUT", 1)))
+COUCHBASE_ACCESS_TIMEOUT = timedelta(milliseconds=int(os.environ.get("CLCACHE_COUCHBASE_ACCESS_TIMEOUT", 1)))
 
 # The cl default codec
 CL_DEFAULT_CODEC = "mbcs"

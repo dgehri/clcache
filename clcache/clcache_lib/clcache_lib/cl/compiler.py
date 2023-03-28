@@ -26,6 +26,26 @@ from ..utils.util import line_iter, print_stdout_and_stderr
 from . import *  # type: ignore
 
 
+def _sanitize_stdout(output: str) -> str:
+    # iterate over stdout and collapse folders if path is too long
+    regex = re.compile(r'^(\w+: [ \w]+: +)(\S.*?)\r?$')
+
+    lines = []
+    for line in line_iter(output):
+        if m := regex.match(line):
+            file_path = m[2]
+            if len(file_path) > MAX_PATH - 10:
+                sanitized_path = os.path.normpath(file_path)
+                lines.append(
+                    f"{m[1]}{sanitized_path}{line[m.end(2):]}")
+                continue
+
+        lines.append(line)
+
+    # print stdout to console
+    return "".join(lines)
+
+
 def _invoke_real_compiler(compiler_path: Path,
                           cmd_line: List[str]) -> int:
     '''Invoke the real compiler and return its exit code.'''
@@ -63,28 +83,10 @@ def _invoke_real_compiler(compiler_path: Path,
         stdout_file.seek(0)
         stdout = stdout_file.read().decode(CL_DEFAULT_CODEC)
 
-    # iterate over stdout and collapse all <folder>/.. and <folder>\. to nothing
-    regex = re.compile(r'^(\w+): ([ \w]+):( +)(?P<file_path>\S.*)$')
-
-    MAX_PATH = 260 - 10  # 10 chars for some margin
-    lines = []
-    for line in line_iter(stdout):
-        if m := regex.match(line):
-            file_path = m['file_path']
-            if len(file_path) > MAX_PATH:
-                sanitized_path = os.path.normpath(file_path)
-                lines.append(
-                    f"{m[1]}: {m[2]}:{m[3]}{sanitized_path}")
-                continue
-
-        lines.append(line)
-
-    lines.append("")
-
-    # print stdout to console
-    sanitized_stdout = "\r\n".join(lines)
     log("Real compiler return code: {0:d}".format(
         return_code), force_flush=True)
+
+    sanitized_stdout = _sanitize_stdout(stdout)
     print_binary(sys.stdout, sanitized_stdout.encode(CL_DEFAULT_CODEC))
     return return_code
 
@@ -135,7 +137,7 @@ def _capture_real_compiler(compiler_path: Path,
 
     log("Real compiler returned code: {0:d}".format(
         return_code), force_flush=True)
-    return return_code, stdout, stderr
+    return return_code, _sanitize_stdout(stdout), stderr
 
 
 def process_compile_request(cache: Cache, compiler_path: Path, args: List[str]) -> int:
@@ -791,16 +793,17 @@ def _parse_includes_set(compiler_output: str, src_file: Path, strip: bool) -> Tu
     # - colon
     # - one or more spaces
     # - the file path, starting with a non-whitespace character
-    regex = re.compile(r"^(\w+): ([ \w]+):( +)(?P<file_path>\S.*)$")
+    regex = re.compile(r'^\w+: [ \w]+: +(\S.*?)\r?$')
 
     abs_src_file = src_file.absolute()
     for line in line_iter(compiler_output):
         if m := regex.match(line):
-            file_path = Path(os.path.normpath(m["file_path"])).absolute()
+            file_path = Path(os.path.normpath(m[1])).absolute()
             if file_path != abs_src_file:
                 include_set.add(file_path)
         elif strip:
             filtered_output.append(line)
+
     if strip:
         return list(include_set), "".join(filtered_output)
     else:

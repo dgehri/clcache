@@ -1,12 +1,14 @@
 import ctypes
 import functools
+import glob
 import os
+import re
 import sys
 import threading
 from ctypes import wintypes
 from pathlib import Path
 from shutil import rmtree
-from typing import Generator
+from typing import Generator, Optional
 
 import scandir
 
@@ -134,27 +136,35 @@ def ensure_dir_exists(path: Path):
 
 
 def line_iter(str: str) -> Generator[str, None, None]:
-    '''Iterate over lines in a string, separated by newline characters.'''
-    pos = -1
+    '''
+    Iterate over lines in a string, separated by newline characters.
+
+    The returned lines include the newline character.
+    '''
+    pos = 0
     while True:
-        next_pos = str.find('\n', pos + 1)
+        next_pos = str.find('\n', pos)
         if next_pos < 0:
+            yield str[pos:]
             break
-        line = str[pos + 1:next_pos]
-        yield line.rstrip("\r\n")
-        pos = next_pos
+        yield str[pos:next_pos+1]
+        pos = next_pos+1
 
 
 def line_iter_b(str: bytes) -> Generator[bytes, None, None]:
-    '''Iterate over lines in a bytestring, separated by newline characters.'''
-    pos = -1
+    '''
+    Iterate over lines in a string, separated by newline characters.
+
+    The returned lines include the newline character.
+    '''
+    pos = 0
     while True:
-        next_pos = str.find(b'\n', pos + 1)
+        next_pos = str.find(b'\n', pos)
         if next_pos < 0:
+            yield str[pos:]
             break
-        line = str[pos + 1:next_pos]
-        yield line.rstrip(b"\r\n")
-        pos = next_pos
+        yield str[pos:next_pos+1]
+        pos = next_pos+1
 
 
 @functools.cache
@@ -196,3 +206,8 @@ def normalize_dir(dir_path: Path) -> Path:
     if result.endswith(os.path.sep):
         result = result[:-1]
     return Path(result)
+
+
+def correct_case_path(path: Path) -> Path:
+    pattern = re.sub(r'([^:/\\])(?=[/\\]|$)', r'[\1]', os.path.normpath(path))
+    return Path(r[0]) if (r := glob.glob(pattern)) else path
