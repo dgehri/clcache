@@ -3,7 +3,7 @@ from conan.tools.files import rename, rmdir
 
 class ClcacheConan(ConanFile):
     name = "clcache"
-    version = "4.4.4y"
+    version = "4.4.4aa"
     author = "Daniel Gehriger <dgehriger@globusmedical.com>"
     settings = "os", "arch"
     description = "A compiler cache for Microsoft Visual Studio"
@@ -13,11 +13,21 @@ class ClcacheConan(ConanFile):
     channel = "dev"
 
     def package(self):
-        self.copy("*", dst="bin", src="../clcache.dist")
-        self.copy("clcache.exe", dst="tmp", src="../clcache.dist")
-        self.copy("*", dst="bin", src="../bin")
-        rename(self, f"{self.package_folder}/tmp/clcache.exe", f"{self.package_folder}/bin/moccache.exe")
-        rmdir(self, f"{self.package_folder}/tmp")
+        # Copy clcache.exe to bin and rename to moccache.exe
+        self.copy("*", dst="bin/py", src="../clcache.dist")
+        rename(self, f"{self.package_folder}/bin/py/clcache.exe", f"{self.package_folder}/bin/py/moccache.exe")
+
+        # Copy clcache.exe to bin/py
+        self.copy("clcache.exe", dst="bin/py", src="../clcache.dist")
+        
+        # Copy clcache_launcher.exe and rename to clcache.exe
+        self.copy("clcache_launcher.exe", dst="bin", src="../clcache_launcher/target/release")
+        rename(self, f"{self.package_folder}/bin/clcache_launcher.exe", f"{self.package_folder}/bin/clcache.exe")
+        
+        # Copy clcache_launcher.exe and rename to moccache.exe
+        self.copy("clcache_launcher.exe", dst="bin", src="../clcache_launcher/target/release")
+        rename(self, f"{self.package_folder}/bin/clcache_launcher.exe", f"{self.package_folder}/bin/moccache.exe")
+        
         self.copy("*", dst=".", src="doc")
 
     def package_info(self):
