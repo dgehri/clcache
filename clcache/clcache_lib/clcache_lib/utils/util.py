@@ -8,11 +8,9 @@ import threading
 from ctypes import wintypes
 from pathlib import Path
 from shutil import rmtree
-from typing import Generator, Optional
+from typing import Generator
 
 import scandir
-
-from ..utils.logging import log
 
 OUTPUT_LOCK = threading.Lock()
 

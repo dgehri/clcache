@@ -3,8 +3,12 @@ import enum
 import multiprocessing
 import sys
 import threading
+import traceback
 import weakref
 from pathlib import Path
+
+import win32con
+import win32evtlogutil
 
 from ..config.config import VERSION
 from ..utils.file_lock import FileLock
@@ -83,3 +87,68 @@ def log(msg: str, level: LogLevel = LogLevel.TRACE, force_flush: bool = False) -
 
 log.messages = None
 log.program_name = None
+
+
+def log_win_event(message: str):  # sourcery skip: use-contextlib-suppress
+    try:
+        if log_win_event.program_name is None:
+            log_win_event.program_name = Path(sys.argv[0]).stem
+
+        if log_win_event.pid is None:
+            log_win_event.pid = multiprocessing.current_process().pid
+
+        event_id = 1000
+        event_type = win32con.EVENTLOG_INFORMATION_TYPE
+        win32evtlogutil.ReportEvent(
+            appName=log_win_event.program_name, eventID=event_id, eventType=event_type, strings=[f"[{log_win_event.pid}] {message}"], data=b"")
+    except Exception:
+        pass
+
+
+log_win_event.program_name = None
+log_win_event.pid = None
+
+# Function to log message to a file in the temp folder, named after the program and PID.
+# The file is opened and closed for each message to ensure that it is written to disk.
+def log_message_to_file(message: str):  # sourcery skip: use-contextlib-suppress
+    try:
+        # acquire lock to ensure that only one thread writes to the file at a time
+        with log_message_to_file.lock:
+            if log_message_to_file.program_name is None:
+                log_message_to_file.program_name = Path(sys.argv[0]).stem
+
+            if log_message_to_file.pid is None:
+                log_message_to_file.pid = multiprocessing.current_process().pid
+
+            log_file = Path(
+                f"{log_message_to_file.program_name}_{log_message_to_file.pid}.log")
+            with open(log_file, "a") as f:
+                f.write(f"{message}\n")
+    except Exception:
+        pass
+    
+log_message_to_file.program_name = None
+log_message_to_file.pid = None
+log_message_to_file.lock = threading.Lock()
+log_message_to_file.nesting = 0
+
+class log_method_call:
+    def __init__(self, func):
+        self.func = func
+        for attr in dir(func):
+            if not attr.startswith("__"):
+                setattr(self, attr, getattr(func, attr))
+
+    def __call__(self, *args, **kwargs):
+        try:
+            log_message_to_file(f"{'  ' * log_message_to_file.nesting}[[[[{self.func.__name__}: {args} / {kwargs}")
+            log_message_to_file.nesting += 1
+            result = self.func(*args, **kwargs)
+            log_message_to_file.nesting -= 1
+            log_message_to_file(f"{'  ' * log_message_to_file.nesting}]]]]")
+        except Exception as e:
+            stack_trace = traceback.format_exc()
+            log_message_to_file(f"{'  ' * log_message_to_file.nesting}!!!!{self.func.__name__}: {stack_trace}")
+            raise
+        return result
+    

@@ -23,7 +23,6 @@ from ..utils.args import (ArgumentT1, ArgumentT2, ArgumentT3, ArgumentT4,
                           split_comands_file)
 from ..utils.errors import *
 from ..utils.util import line_iter, print_stdout_and_stderr
-from . import *  # type: ignore
 
 
 def _sanitize_stdout(output: str) -> str:

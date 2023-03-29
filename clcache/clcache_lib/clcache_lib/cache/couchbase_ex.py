@@ -18,8 +18,8 @@ class RawBinaryTranscoderEx(Transcoder):
 
     def decode_value(
         self,
-        value,  # type: bytes
-        flags,  # type: int
+        value: bytes,
+        flags: int
     ) -> bytes:
 
         fmt = get_decode_format(flags)

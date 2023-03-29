@@ -8,7 +8,7 @@ $MainFunction = {
     # Ask your user if upload is desired
     $upload = Read-Host "Upload $name/$version@$user/$channel to globus-conan-local? (y/n)"
 
-    & venv_py3\Scripts\Activate.ps1
+    & venv_py3.10\Scripts\Activate.ps1
     $env:PATH = "C:\Program Files\Conan\conan;" + $env:PATH
 
     Push-Location clcache\clcache_lib
@@ -21,6 +21,8 @@ $MainFunction = {
     Write-Output "Nuitka version: $nuitkaVersion"
 
     python -m nuitka --standalone --include-package=pyuv --plugin-enable=pylint-warnings --python-flag="-O" --mingw64 .\clcache
+    # python -m nuitka --standalone --include-package=pyuv --plugin-enable=pylint-warnings --python-flag="-O" --clang .\clcache
+
     Push-Location conan
     $env:CONAN_REVISIONS_ENABLED = 1
 
