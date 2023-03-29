@@ -3,7 +3,6 @@ import hashlib
 import os
 import traceback
 from pathlib import Path
-from typing import List, Optional
 
 from ..cache.server import PipeServer, spawn_server
 from ..config import CACHE_VERSION
@@ -33,7 +32,7 @@ def get_compiler_hash(compiler_path: Path) -> str:
     return get_string_hash(data)
 
 
-def _get_sever_timeout_seconds() -> Optional[int]:
+def _get_sever_timeout_seconds() -> int | None:
     '''
     Returns the timeout for the hash server in seconds.
 
@@ -50,7 +49,7 @@ def _get_sever_timeout_seconds() -> Optional[int]:
         return None
 
 
-def get_file_hashes(path_list: List[Path]) -> List[str]:
+def get_file_hashes(path_list: list[Path]) -> list[str]:
     '''
     Returns the hashes of the given files.
 
@@ -102,7 +101,7 @@ def _get_file_hashes_from_server(server_timeout_secs, path_list):
 
 
 @functools.cache
-def get_file_hash(path: Path, toolset_data: Optional[str] = None) -> str:
+def get_file_hash(path: Path, toolset_data: str | None = None) -> str:
     '''
     Returns the hash of the given file.
 

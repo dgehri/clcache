@@ -2,8 +2,9 @@ import contextlib
 import json
 import os
 import time
+from collections.abc import Callable
 from shutil import copyfileobj
-from typing import BinaryIO, Callable, List, NamedTuple, Tuple, cast
+from typing import BinaryIO, NamedTuple, cast
 
 import lz4.frame
 from atomicwrites import atomic_write
@@ -29,7 +30,7 @@ class CompilerArtifacts(NamedTuple):
     payload_path: Path
     stdout: str
     stderr: str
-    copy_filter: Optional[Callable[[BinaryIO, BinaryIO], None]] = None
+    copy_filter: Callable[[BinaryIO, BinaryIO], None] | None = None
 
 
 class ManifestEntry(NamedTuple):
@@ -40,7 +41,7 @@ class ManifestEntry(NamedTuple):
         - includesContentHash: hash of the contents of the include_files
         - objectHash: hash calculated from includeContentHash and the manifest hash
     '''
-    includeFiles: List[str]
+    includeFiles: list[str]
     includesContentHash: str
     objectHash: str
 
@@ -59,12 +60,12 @@ class ManifestEntry(NamedTuple):
 class Manifest:
     '''Represents a manifest file'''
 
-    def __init__(self, entries: Optional[List[ManifestEntry]] = None):
+    def __init__(self, entries: list[ManifestEntry] | None = None):
         if entries is None:
             entries = []
-        self._entries: List[ManifestEntry] = entries.copy()
+        self._entries: list[ManifestEntry] = entries.copy()
 
-    def entries(self) -> List[ManifestEntry]:
+    def entries(self) -> list[ManifestEntry]:
         return self._entries
 
     def add_entry(self, entry: ManifestEntry):
@@ -123,7 +124,7 @@ class ManifestSection:
                 time.sleep(0.5)
         assert False, "unreachable"
 
-    def get_manifest(self, manifest_hash: str) -> Optional[Tuple[Manifest, int]]:
+    def get_manifest(self, manifest_hash: str) -> tuple[Manifest, int] | None:
         '''Reads manifest from disk and returns the size of the manifest file'''
         manifest_file = self.manifest_path(manifest_hash)
         if not manifest_file.exists():
@@ -132,7 +133,7 @@ class ManifestSection:
             # touch manifest file to prevent it from being cleaned up
             manifest_file.touch()
 
-            with open(manifest_file, "r") as in_file:
+            with open(manifest_file) as in_file:
                 doc = json.load(in_file)
                 visited = set()
                 return Manifest(
@@ -147,7 +148,7 @@ class ManifestSection:
                         and not visited.add(e["includesContentHash"])
                     ]
                 ), manifest_file.stat().st_size
-        except IOError:
+        except OSError:
             return None
         except (ValueError, KeyError):
             log(
@@ -195,7 +196,7 @@ class ManifestRepository:
         Returns:
             The total size of the remaining manifest files in bytes.
         '''
-        manifest_file_infos: List[Tuple[os.stat_result, Path]] = []
+        manifest_file_infos: list[tuple[os.stat_result, Path]] = []
         for section in self.sections():
             file_path: Path
             for file_path in section.manifest_files():
@@ -212,7 +213,7 @@ class ManifestRepository:
         return remaining_obj_size
 
     @staticmethod
-    def get_includes_content_hash_for_files(includes: List[Path]) -> str:
+    def get_includes_content_hash_for_files(includes: list[Path]) -> str:
         try:
             list_of_hashes = get_file_hashes(includes)
         except FileNotFoundError as e:
@@ -220,7 +221,7 @@ class ManifestRepository:
         return ManifestRepository.get_includes_content_hash_for_hashes(list_of_hashes)
 
     @staticmethod
-    def get_includes_content_hash_for_hashes(hashes: List[str]) -> str:
+    def get_includes_content_hash_for_hashes(hashes: list[str]) -> str:
         return HashAlgorithm(",".join(hashes).encode()).hexdigest()
 
 
@@ -241,9 +242,9 @@ class CompilerArtifactsSection:
         '''Returns a generator of cache entry keys.'''
         return child_dirs_str(str(self.compilerArtifactsSectionDir), absolute=False)
 
-    def cached_objects(self, key: str) -> List[Path]:
+    def cached_objects(self, key: str) -> list[Path]:
         '''Returns a list of paths to cached object files for the given key.'''
-        paths: List[Path] = []
+        paths: list[Path] = []
 
         base_path = self.cache_entry_dir(
             key) / CompilerArtifactsSection.PAYLOAD_FILE
@@ -267,7 +268,7 @@ class CompilerArtifactsSection:
         entry_dir: Path = self.cache_entry_dir(key)
         return entry_dir.exists() and any(entry_dir.iterdir())
 
-    def set_entry(self, key: str, artifacts: CompilerArtifacts) -> Tuple[int, Optional[Path]]:
+    def set_entry(self, key: str, artifacts: CompilerArtifacts) -> tuple[int, Path | None]:
         # sourcery skip: extract-method
         '''
         Sets the cache entry for the given key to the given artifacts.
@@ -384,9 +385,9 @@ class CompilerArtifactsSection:
     @staticmethod
     def _read_from_cache(path: Path) -> str:
         try:
-            with open(path, "r") as f:
+            with open(path) as f:
                 return f.read()
-        except IOError:
+        except OSError:
             return ""
 
 
@@ -411,7 +412,7 @@ class CompilerArtifactsRepository:
         )
         rmtree(compilerArtifactsDir, ignore_errors=True)
 
-    def clean(self, max_compiler_artifacts_size: int) -> Tuple[int, int]:
+    def clean(self, max_compiler_artifacts_size: int) -> tuple[int, int]:
         '''
         Removes compiler artifacts until the total size of the artifacts is less than the given maximum size.
 
@@ -464,7 +465,7 @@ class CompilerArtifactsRepository:
 
 
 class CacheFileStrategy:
-    def __init__(self, cache_dir: Optional[Path] = None):
+    def __init__(self, cache_dir: Path | None = None):
         self.dir = cache_dir
         if not self.dir:
             try:
@@ -527,7 +528,7 @@ class CacheFileStrategy:
         size, _ = self.set_entry_ex(key, value)
         return size
 
-    def set_entry_ex(self, key: str, value) -> Tuple[int, Optional[Path]]:
+    def set_entry_ex(self, key: str, value) -> tuple[int, Path | None]:
         '''Set the entry for the given key to the given value and return the size of the entry in bytes.'''
         return self.compiler_artifacts_repository.section(key).set_entry(key, value)
 
@@ -555,7 +556,7 @@ class CacheFileStrategy:
             manifest_hash, manifest
         )
 
-    def get_manifest(self, manifest_hash: str, _: bool = True) -> Optional[Tuple[Manifest, int]]:
+    def get_manifest(self, manifest_hash: str, _: bool = True) -> tuple[Manifest, int] | None:
         return self.manifests_repository.section(manifest_hash).get_manifest(manifest_hash)
 
     def clear(self):
@@ -593,8 +594,8 @@ class CacheFileStrategy:
 
 def _copy_to_cache(src_file_path: Path,
                    dst_file_path: Path,
-                   copy_filter: Optional[Callable[[BinaryIO, BinaryIO], None]] = None) \
-        -> Tuple[int, str]:
+                   copy_filter: Callable[[BinaryIO, BinaryIO], None] | None = None) \
+        -> tuple[int, str]:
     '''
     Copy a file to the cache.
 
@@ -623,7 +624,7 @@ def _copy_to_cache(src_file_path: Path,
 
 def copy_from_cache(src_file: Path,
                     dst_file: Path,
-                    copy_filter: Optional[Callable[[BinaryIO, BinaryIO], None]] = None):
+                    copy_filter: Callable[[BinaryIO, BinaryIO], None] | None = None):
     '''
     Copy a file from the cache.
 

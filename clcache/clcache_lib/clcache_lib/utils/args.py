@@ -1,8 +1,6 @@
-
 import codecs
 from collections import defaultdict
 from pathlib import Path
-from typing import Dict, List, Optional, Set, Tuple
 
 from ..utils.errors import *
 
@@ -87,7 +85,7 @@ def split_comands_file(content):
     return CommandLineTokenizer(content).argv
 
 
-def expand_response_file(cmdline : List[str]) -> List[str]:
+def expand_response_file(cmdline : list[str]) -> list[str]:
     '''
     Expand command line arguments that start with @ to the contents of the (response) file.
     '''
@@ -153,27 +151,22 @@ class Argument:
 
 class ArgumentNoParam(Argument):
     '''/NAME (no space)'''
-    pass
 
 
 class ArgumentT1(Argument):
     '''/NAMEparameter (no space, required parameter).'''
-    pass
 
 
 class ArgumentT2(Argument):
     '''/NAME[parameter] (no space, optional parameter)'''
-    pass
 
 
 class ArgumentT3(Argument):
     '''/NAME[ ]parameter (optional space)'''
-    pass
 
 
 class ArgumentT4(Argument):
     '''/NAME parameter (required space)'''
-    pass
 
 
 class ArgumentQtShort(Argument):
@@ -206,13 +199,13 @@ class ArgumentQtLongWithParam(Argument):
 
 class CommandLineAnalyzer:
 
-    def __init__(self, args: Set[Argument],
-                 args_to_unify_and_sort: List[Tuple[str, bool]]) -> None:
+    def __init__(self, args: set[Argument],
+                 args_to_unify_and_sort: list[tuple[str, bool]]) -> None:
         self._args = sorted(
             args, key=len, reverse=True)
         self._args_to_unify_and_sort = args_to_unify_and_sort
 
-    def _get_parametrized_arg_type(self, cmd_line_arg: str) -> Optional[Argument]:
+    def _get_parametrized_arg_type(self, cmd_line_arg: str) -> Argument | None:
         '''
         Get typed argument from command line argument.
         '''
@@ -226,14 +219,14 @@ class CommandLineAnalyzer:
             if cmd_line_arg.startswith(arg.name, offset):
                 return arg
 
-    def get_args_to_unify_and_sort(self) -> Dict[str, bool]:
+    def get_args_to_unify_and_sort(self) -> dict[str, bool]:
         # Convert list of tuples to dictionary
         return dict(self._args_to_unify_and_sort)
 
     def _parse_arg(self,
                    arg: Argument,
-                   cmdline: List[str], i: int) \
-            -> Tuple[int, Optional[str]]:
+                   cmdline: list[str], i: int) \
+            -> tuple[int, str | None]:
         # sourcery skip: assign-if-exp
         '''
         Parse argument.
@@ -293,12 +286,12 @@ class CommandLineAnalyzer:
 
         raise AssertionError("Unsupported argument type.")
 
-    def parse_args_and_input_files(self, cmdline: List[str]) \
-            -> Tuple[Dict[str, List[str]], List[Path]]:
+    def parse_args_and_input_files(self, cmdline: list[str]) \
+            -> tuple[dict[str, list[str]], list[Path]]:
 
         # Iterate over command line arguments and use _parse_arg to parse them.
         arguments = defaultdict(list)
-        input_files: List[Path] = []
+        input_files: list[Path] = []
         i = 0
         while i < len(cmdline):
             arg_str: str = cmdline[i]

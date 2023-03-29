@@ -1,7 +1,7 @@
-from ctypes import windll, wintypes
+from ctypes import windll
 import ctypes
 
-class NamedMutex(object):
+class NamedMutex:
     """A named, system-wide mutex that can be acquired and released."""
 
     def __init__(self, name, acquired=False):
@@ -61,7 +61,7 @@ class NamedMutex(object):
 
     def __repr__(self):
         """Return the Python representation of this mutex."""
-        return '{0}({1!r}, acquired={2})'.format(
+        return '{}({!r}, acquired={})'.format(
                 self.__class__.__name__, self.name, self.acquired)
 
     __str__ = __repr__

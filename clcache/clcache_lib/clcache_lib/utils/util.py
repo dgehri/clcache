@@ -8,7 +8,7 @@ import threading
 from ctypes import wintypes
 from pathlib import Path
 from shutil import rmtree
-from typing import Generator
+from collections.abc import Generator
 
 import scandir
 

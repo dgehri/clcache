@@ -1,13 +1,15 @@
 import contextlib
-from enum import IntEnum
 import os
+from collections.abc import Callable
+from enum import IntEnum
 from pathlib import Path
-from typing import Callable, Optional, Tuple, BinaryIO
+from typing import BinaryIO
 
 from ..config.config import VERSION
 from ..utils.logging import LogLevel, log
 from .file_cache import CacheFileStrategy, CompilerArtifacts
 from .stats import CacheStats, MissReason, PersistentStats, Stats
+
 
 class Location(IntEnum):
     LOCAL = 1,
@@ -15,7 +17,7 @@ class Location(IntEnum):
     LOCAL_AND_REMOTE = 3
     
 class Cache:
-    def __init__(self, cache_dir: Optional[Path] = None):
+    def __init__(self, cache_dir: Path | None = None):
         if url := os.environ.get("CLCACHE_COUCHBASE"):
             try:
                 from .remote_cache import \
@@ -107,15 +109,15 @@ def ensure_artifacts_exist(cache: Cache,
                            cache_key: str,
                            reason: MissReason,
                            payload: Path,
-                           compiler_result: Tuple[int, str, str],
-                           canonicalize_stdout: Optional[Callable[[
-                               str], str]] = None,
-                           canonicalize_stderr: Optional[Callable[[
-                               str], str]] = None,
-                           post_commit_action: Optional[Callable[[
-                           ], int]] = None,
-                           output_file_filter: Optional[Callable[[BinaryIO, BinaryIO], None]] = None
-                           ) -> Tuple[int, str, str]:
+                           compiler_result: tuple[int, str, str],
+                           canonicalize_stdout: None | (Callable[[
+                               str], str]) = None,
+                           canonicalize_stderr: None | (Callable[[
+                               str], str]) = None,
+                           post_commit_action: None | (Callable[[
+                           ], int]) = None,
+                           output_file_filter: Callable[[BinaryIO, BinaryIO], None] | None = None
+                           ) -> tuple[int, str, str]:
     '''
     Ensure that the artifacts for the given cache key exist.
 
@@ -131,7 +133,7 @@ def ensure_artifacts_exist(cache: Cache,
         output_file_filter: A function to filter the output files.
 
     Returns:
-        Tuple[int, str, str]: A tuple containing the exit code, stdout and stderr.
+        tuple[int, str, str]: A tuple containing the exit code, stdout and stderr.
     '''
     return_code, compiler_stdout, compiler_stderr = compiler_result
     if return_code == 0 and payload.exists():
@@ -157,7 +159,7 @@ def _add_object_to_cache(cache: Cache,
                          cache_key: str,
                          artifacts: CompilerArtifacts,
                          reason: MissReason,
-                         post_commit_action: Optional[Callable[[], int]] = None):
+                         post_commit_action: Callable[[], int] | None = None):
 
     size: int = 0
 

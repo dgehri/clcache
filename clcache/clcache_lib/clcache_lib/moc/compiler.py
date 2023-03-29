@@ -1,4 +1,3 @@
-
 import contextlib
 import os
 import re
@@ -8,7 +7,7 @@ import time
 import traceback
 from pathlib import Path
 from tempfile import TemporaryFile
-from typing import BinaryIO, Dict, List, Optional, Tuple
+from typing import BinaryIO
 
 from ..cache.cache import Cache, Location, ensure_artifacts_exist
 from ..cache.ex import CompilerFailedException, IncludeNotFoundException
@@ -107,7 +106,7 @@ class MocCommandLineAnalyzer(CommandLineAnalyzer):
         super().__init__(args=args,
                          args_to_unify_and_sort=args_to_unify_and_sort)
 
-    def analyze(self, cmdline: List[str]) -> Tuple[Path, Optional[Path], Dict[str, List[str]]]:
+    def analyze(self, cmdline: list[str]) -> tuple[Path, Path | None, dict[str, list[str]]]:
         '''
         Analyzes the command line and returns a list of input and output files.
 
@@ -145,8 +144,8 @@ class MocCommandLineAnalyzer(CommandLineAnalyzer):
 
 
 def _invoke_real_compiler(compiler_path: Path,
-                          cmd_line: List[str]) \
-        -> Tuple[int, str, str]:
+                          cmd_line: list[str]) \
+        -> tuple[int, str, str]:
     '''Invoke the real compiler and return its exit code, stdout and stderr.'''
 
     read_cmd_line = [str(compiler_path)] + cmd_line
@@ -171,14 +170,14 @@ def _invoke_real_compiler(compiler_path: Path,
     sys.stderr.flush()
     return_code = subprocess.call(read_cmd_line)
 
-    log("Real compiler return code: {0:d}".format(return_code))
+    log(f"Real compiler return code: {return_code:d}")
 
     return return_code, stdout, stderr
 
 
 def _capture_real_compiler(compiler_path: Path,
-                           cmd_line: List[str]) \
-        -> Tuple[int, str, str]:
+                           cmd_line: list[str]) \
+        -> tuple[int, str, str]:
     '''Invoke the real compiler and return its exit code, stdout and stderr.'''
 
     read_cmd_line = [str(compiler_path)] + cmd_line
@@ -212,24 +211,24 @@ def _capture_real_compiler(compiler_path: Path,
         stderr_file.seek(0)
         stderr = stderr_file.read().decode(CL_DEFAULT_CODEC)
 
-    log("Real compiler return code: {0:d}".format(return_code))
+    log(f"Real compiler return code: {return_code:d}")
 
     return return_code, stdout, stderr
 
 
 @safe_execute
-def process_compile_request(cache: Cache, compiler: Path, args: List[str]) -> int:
+def process_compile_request(cache: Cache, compiler: Path, args: list[str]) -> int:
     '''
     Process a compile request.
 
     Returns:
         The exit code of the compiler.
     '''
-    log("Command line: '{0!s}'".format(" ".join(args)))
+    log("Command line: '{!s}'".format(" ".join(args)))
 
     cmdline = expand_response_file(args)
 
-    log("Expanded commandline: '{0!s}'".format(" ".join(cmdline)))
+    log("Expanded commandline: '{!s}'".format(" ".join(cmdline)))
 
     try:
         analyzer = MocCommandLineAnalyzer()
@@ -286,11 +285,11 @@ def process_compile_request(cache: Cache, compiler: Path, args: List[str]) -> in
 def _schedule_jobs(
     cache: Cache,
     compiler: Path,
-    cmd_line: List[str],
+    cmd_line: list[str],
     header_file: Path,
-    output_file: Optional[Path],
+    output_file: Path | None,
     analyzer: MocCommandLineAnalyzer,
-    options: Dict[str, List[str]]
+    options: dict[str, list[str]]
 ) -> int:
     '''
     Schedule jobs for the given command line.
@@ -302,7 +301,7 @@ def _schedule_jobs(
         cache, compiler, cmd_line, header_file,
         output_file, analyzer, options
     )
-    log("Finished. Exit code {0:d}".format(exit_code), force_flush=True)
+    log(f"Finished. Exit code {exit_code:d}", force_flush=True)
     print_stdout_and_stderr(out, err, CL_DEFAULT_CODEC)
 
     return exit_code
@@ -310,16 +309,16 @@ def _schedule_jobs(
 
 def _process_single_source(cache: Cache,
                            compiler: Path,
-                           cmdline: List[str],
+                           cmdline: list[str],
                            header_file: Path,
-                           output_file: Optional[Path],
+                           output_file: Path | None,
                            analyzer: MocCommandLineAnalyzer,
-                           options: Dict[str, List[str]]) \
-        -> Tuple[int, str, str]:
+                           options: dict[str, list[str]]) \
+        -> tuple[int, str, str]:
     '''
     Process a single source file.
         Returns:
-            Tuple[int, str, str]: A tuple containing the exit code, stdout, stderr
+            tuple[int, str, str]: A tuple containing the exit code, stdout, stderr
     '''
     try:
         assert output_file is not None
@@ -335,10 +334,10 @@ def _process_single_source(cache: Cache,
 def _process(cache: Cache,
              output_file: Path,
              compiler_path: Path,
-             cmdline: List[str],
+             cmdline: list[str],
              header_file: Path,
              analyzer: MocCommandLineAnalyzer,
-             options: Dict[str, List[str]]) -> Tuple[int, str, str]:
+             options: dict[str, list[str]]) -> tuple[int, str, str]:
     '''
     Process a single source file.
 
@@ -349,7 +348,7 @@ def _process(cache: Cache,
             src_file (Path): The source file to compile.
 
         Returns:
-            Tuple[int, str, str]: A tuple containing the exit code, stdout, stderr
+            tuple[int, str, str]: A tuple containing the exit code, stdout, stderr
     '''
 
     # Get manifest hash
@@ -505,7 +504,7 @@ def _canonicalize_moc_output_file(file_in: BinaryIO,
     '''
     re_include = re.compile(rb"^#include\s+\"(.*)\"")
     filter_line = True
-    stop_line = "QT_BEGIN_MOC_NAMESPACE".encode()
+    stop_line = b"QT_BEGIN_MOC_NAMESPACE"
     for line in line_iter_b(file_in.read()):
         if filter_line:
             if line.rstrip() == stop_line:
@@ -525,7 +524,7 @@ def _canonicalize_moc_output_file(file_in: BinaryIO,
 
 
 def _get_manifest_hash(compiler_path: Path,
-                       cmd_line: List[str],
+                       cmd_line: list[str],
                        src_file: Path,
                        analyzer: MocCommandLineAnalyzer) -> str:
     '''
@@ -589,7 +588,7 @@ def _safe_unlink(path: Path) -> None:
 
 def _create_dep_file(dep_file_path: Path,
                      rule: Path,
-                     include_paths: List[str]) -> None:
+                     include_paths: list[str]) -> None:
     """Create a dependency file."""
     def escaped_path(path: Path) -> str:
         return path.as_posix().replace("\\", "\\\\").replace(" ", "\\ ")
@@ -608,7 +607,7 @@ def _create_dep_file(dep_file_path: Path,
 
 def _process_cache_hit(cache: Cache,
                        output_file: Path,
-                       cache_key: str) -> Tuple[int, str, str]:
+                       cache_key: str) -> tuple[int, str, str]:
     """
     Process a cache hit, copying the object file from the cache to the output directory.
 
@@ -638,7 +637,7 @@ def _process_cache_hit(cache: Cache,
             '''
             re_include = re.compile(rb"^#include\s+\"(.*)\"")
             filter_line = True
-            stop_line = "QT_BEGIN_MOC_NAMESPACE".encode()
+            stop_line = b"QT_BEGIN_MOC_NAMESPACE"
             for line in line_iter_b(file_in.read()):
                 if filter_line:
                     if line.rstrip() == stop_line:
@@ -668,10 +667,10 @@ def _process_cache_hit(cache: Cache,
         )
 
 
-def _parse_dep_file(dep_file_path: Path) -> List[Path]:
+def _parse_dep_file(dep_file_path: Path) -> list[Path]:
     """Parse a dependency file and return the list of included files."""
     # extract depencencies from a makefile-style dep file
-    with open(dep_file_path, "r") as dep_file:
+    with open(dep_file_path) as dep_file:
         buf = dep_file.read()
 
         # find the first colon, which separates the target from the dependencies,

@@ -6,9 +6,9 @@ import subprocess
 import sys
 import time
 import traceback
+from collections.abc import Iterator
 from pathlib import Path
 from tempfile import TemporaryFile
-from typing import Dict, Iterator, List, Optional, Set, Tuple
 
 from ..cache import *  # type: ignore
 from ..cache.cache import Cache, ensure_artifacts_exist
@@ -47,7 +47,7 @@ def _sanitize_stdout(output: str) -> str:
 
 
 def _invoke_real_compiler(compiler_path: Path,
-                          cmd_line: List[str]) -> int:
+                          cmd_line: list[str]) -> int:
     '''Invoke the real compiler and return its exit code.'''
     set_llvm_dir(compiler_path)
 
@@ -77,8 +77,8 @@ def _invoke_real_compiler(compiler_path: Path,
 
 
 def _capture_real_compiler(compiler_path: Path,
-                           cmd_line: List[str],
-                           environment: Optional[Dict[str, str]] = None) -> Tuple[int, str, str]:
+                           cmd_line: list[str],
+                           environment: dict[str, str] | None = None) -> tuple[int, str, str]:
     '''Invoke the real compiler and return its exit code, stdout and stderr.'''
 
     set_llvm_dir(compiler_path)
@@ -121,25 +121,25 @@ def _capture_real_compiler(compiler_path: Path,
         stderr_file.seek(0)
         stderr = stderr_file.read().decode(CL_DEFAULT_CODEC)
 
-    log("Real compiler returned code: {0:d}".format(
+    log("Real compiler returned code: {:d}".format(
         return_code), force_flush=True)
     return return_code, _sanitize_stdout(stdout), stderr
 
 @safe_execute
-def process_compile_request(cache: Cache, compiler_path: Path, args: List[str]) -> int:
+def process_compile_request(cache: Cache, compiler_path: Path, args: list[str]) -> int:
     '''
     Process a compile request.
 
     Returns:
         The exit code of the compiler.
     '''
-    log("Command line: '{0!s}'".format(" ".join(args)))
+    log("Command line: '{!s}'".format(" ".join(args)))
 
     set_llvm_dir(compiler_path)
 
     cmdline, environment = _extend_cmdline_from_env(args, dict(os.environ))
     cmdline = expand_response_file(cmdline)
-    log("Expanded commandline: '{0!s}'".format(" ".join(cmdline)))
+    log("Expanded commandline: '{!s}'".format(" ".join(cmdline)))
 
     try:
         analyzer = ClCommandLineAnalyzer()
@@ -181,9 +181,9 @@ def process_compile_request(cache: Cache, compiler_path: Path, args: List[str]) 
     return _invoke_real_compiler(compiler_path, args)
 
 
-def _extend_cmdline_from_env(cmd_line: List[str],
-                             environment: Dict[str, str]) \
-        -> Tuple[List[str], Dict[str, str]]:
+def _extend_cmdline_from_env(cmd_line: list[str],
+                             environment: dict[str, str]) \
+        -> tuple[list[str], dict[str, str]]:
     '''
     Extend command line with CL and _CL_ environment variables
 
@@ -283,7 +283,7 @@ class ClCommandLineAnalyzer(CommandLineAnalyzer):
 
         super().__init__(args=args_with_params, args_to_unify_and_sort=args_to_unify_and_sort)
 
-    def analyze(self, cmdline: List[str]) -> Tuple[List[Tuple[Path, str]], List[Path]]:
+    def analyze(self, cmdline: list[str]) -> tuple[list[tuple[Path, str]], list[Path]]:
         '''
         Analyzes the command line and returns a list of input and output files.
 
@@ -355,7 +355,7 @@ class ClCommandLineAnalyzer(CommandLineAnalyzer):
         return input_files, obj_files
 
 
-def _job_count(cmd_line: List[str]) -> int:
+def _job_count(cmd_line: list[str]) -> int:
     '''
     Returns the amount of jobs
 
@@ -382,7 +382,7 @@ def _job_count(cmd_line: List[str]) -> int:
         return 2
 
 
-def _process_cache_hit(cache: Cache, obj_file: Path, cache_key: str) -> Tuple[int, str, str]:
+def _process_cache_hit(cache: Cache, obj_file: Path, cache_key: str) -> tuple[int, str, str]:
     """
     Process a cache hit, copying the object file from the cache to the output directory.
 
@@ -428,7 +428,7 @@ def _process_cache_hit(cache: Cache, obj_file: Path, cache_key: str) -> Tuple[in
 
 
 def _filter_source_files(
-    cmd_line: List[str], src_files: List[Tuple[Path, str]]
+    cmd_line: list[str], src_files: list[tuple[Path, str]]
 ) -> Iterator[str]:
     '''
     Filter out all source files from the command line
@@ -452,10 +452,10 @@ def _filter_source_files(
 def _schedule_jobs(
     cache: Cache,
     compiler: Path,
-    cmd_line: List[str],
-    environment: Dict[str, str],
-    src_files: List[Tuple[Path, str]],
-    obj_files: List[Path],
+    cmd_line: list[str],
+    environment: dict[str, str],
+    src_files: list[tuple[Path, str]],
+    obj_files: list[Path],
     analyzer: ClCommandLineAnalyzer
 ) -> int:
     '''
@@ -512,7 +512,7 @@ def _schedule_jobs(
                 )
             for future in concurrent.futures.as_completed(jobs):
                 exit_code, out, err = future.result()
-                log("Finished. Exit code {0:d}".format(
+                log("Finished. Exit code {:d}".format(
                     exit_code), force_flush=True)
                 print_stdout_and_stderr(out, err, CL_DEFAULT_CODEC)
 
@@ -524,25 +524,25 @@ def _schedule_jobs(
 
 def _process_single_source(cache: Cache,
                            compiler: Path,
-                           cmdline: List[str],
+                           cmdline: list[str],
                            src_file: Path,
                            obj_file: Path,
-                           environment: Optional[Dict[str, str]],
+                           environment: dict[str, str] | None,
                            analyzer: ClCommandLineAnalyzer) \
-        -> Tuple[int, str, str]:
+        -> tuple[int, str, str]:
     '''
     Process a single source file.
 
         Parameters:
             cache (Cache): The cache to use.
             compiler (Path): The path to the compiler.
-            cmdline (List[str]): The command line to invoke the compiler with.
+            cmdline (list[str]): The command line to invoke the compiler with.
             src_file (Path): The source file to compile.
             obj_file (Path): The object file to create.
             environment (Dict[str, str]): The environment to use when invoking the compiler.
 
         Returns:
-            Tuple[int, str, str]: A tuple containing the exit code, stdout, stderr
+            tuple[int, str, str]: A tuple containing the exit code, stdout, stderr
     '''
     try:
         assert obj_file is not None
@@ -559,9 +559,9 @@ def _process_single_source(cache: Cache,
 def _process(cache: Cache,
              obj_file: Path,
              compiler_path: Path,
-             cmdline: List[str],
+             cmdline: list[str],
              src_file: Path,
-             analyzer: ClCommandLineAnalyzer) -> Tuple[int, str, str]:
+             analyzer: ClCommandLineAnalyzer) -> tuple[int, str, str]:
     '''
     Process a single source file.
 
@@ -572,7 +572,7 @@ def _process(cache: Cache,
             src_file (Path): The source file to compile.
 
         Returns:
-            Tuple[int, str, str]: A tuple containing the exit code, stdout, stderr
+            tuple[int, str, str]: A tuple containing the exit code, stdout, stderr
     '''
 
     # Get manifest hash
@@ -709,7 +709,7 @@ def _process(cache: Cache,
 
 
 def _get_manifest_hash(compiler_path: Path,
-                       cmd_line: List[str],
+                       cmd_line: list[str],
                        src_file: Path,
                        analyzer: ClCommandLineAnalyzer) -> str:
     '''
@@ -752,7 +752,7 @@ def _get_manifest_hash(compiler_path: Path,
     return get_file_hash(src_file, toolset_data)
 
 
-def _parse_includes_set(compiler_output: str, src_file: Path, strip: bool) -> Tuple[List[Path], str]:
+def _parse_includes_set(compiler_output: str, src_file: Path, strip: bool) -> tuple[list[Path], str]:
     """
     Parse the compiler output and return a set of include file paths.
 
@@ -765,7 +765,7 @@ def _parse_includes_set(compiler_output: str, src_file: Path, strip: bool) -> Tu
             A tuple of a set of include file paths and the compiler output with or without include directives.
     """
     filtered_output = []
-    include_set: Set[Path] = set()
+    include_set: set[Path] = set()
 
     # Example lines
     # Note: including file:         C:\Program Files (x86)\Microsoft Visual Studio 12.0\VC\INCLUDE\limits.h

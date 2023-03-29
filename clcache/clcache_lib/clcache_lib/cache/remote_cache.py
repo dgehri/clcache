@@ -1,7 +1,7 @@
 import contextlib
 import hashlib
 import re
-from typing import BinaryIO, Dict
+from typing import BinaryIO
 
 from couchbase.auth import PasswordAuthenticator
 from couchbase.cluster import Bucket, Cluster
@@ -53,7 +53,7 @@ class CacheCouchbaseStrategy:
 
     def __init__(self, url: str):
         self._is_bad = False
-        self._cache: Dict[str, Optional[Dict]] = {}
+        self._cache: dict[str, dict | None] = {}
         self._url: str = url
         self.__cluster = None
         self.__bucket = None
@@ -109,7 +109,7 @@ class CacheCouchbaseStrategy:
         return self.__coll_object_data
 
     @staticmethod
-    def _split_host(host: str) -> Tuple[str, str, str]:
+    def _split_host(host: str) -> tuple[str, str, str]:
         m = re.match(r"^(?:couchbase://)?([^:]+):([^@]+)@(\S+)$", host)
         if m is None:
             raise ValueError
@@ -119,7 +119,7 @@ class CacheCouchbaseStrategy:
     def __str__(self):
         return f"Remote Couchbase {self.host}"
 
-    def _fetch_entry(self, key: str) -> Optional[bool]:
+    def _fetch_entry(self, key: str) -> bool | None:
         try:
             return self._fetch_entry_impl(key)
         except Exception:
@@ -127,7 +127,7 @@ class CacheCouchbaseStrategy:
             self._cache[key] = None
             return None
 
-    def _fetch_entry_impl(self, key: str) -> Optional[bool]:
+    def _fetch_entry_impl(self, key: str) -> bool | None:
         '''Fetches an entry from the cache and stores it in self.cache.'''
 
         res = self._coll_objects.get_and_touch(key, COUCHBASE_EXPIRATION,
@@ -183,7 +183,7 @@ class CacheCouchbaseStrategy:
         in_cache = key in self._cache and self._cache[key] is not None
         return in_cache or self._fetch_entry(key) is not None
 
-    def get_entry_as_payload(self, key: str) -> Optional[dict]:
+    def get_entry_as_payload(self, key: str) -> dict | None:
         '''
         Returns the entry as a dict, or None if it is not in the cache.
         '''
@@ -301,7 +301,7 @@ class CacheCouchbaseStrategy:
             log(f"Could not set {key} in remote cache", level=LogLevel.TRACE)
 
     @functools.cache
-    def get_manifest(self, key: str) -> Optional[Manifest]:
+    def get_manifest(self, key: str) -> Manifest | None:
         if self._is_bad:
             return None
 
@@ -351,7 +351,7 @@ class CacheFileWithCouchbaseFallbackStrategy:
         hit = self.local_cache.has_entry(key)
         return True if hit else self.remote_cache.has_entry(key)
 
-    def get_entry(self, key: str) -> Optional[CompilerArtifacts]:
+    def get_entry(self, key: str) -> CompilerArtifacts | None:
         '''
         Returns the cache entry, or None if it is not in the cache.
 
@@ -408,7 +408,9 @@ class CacheFileWithCouchbaseFallbackStrategy:
 
         return size
 
-    def get_manifest(self, manifest_hash: str, skip_remote: bool) -> Optional[Tuple[Manifest, int]]:
+    def get_manifest(self,
+                     manifest_hash: str,
+                     skip_remote: bool) -> tuple[Manifest, int] | None:
         '''
         Returns the manifest, or None if it is not in the cache.
 

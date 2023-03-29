@@ -4,7 +4,6 @@ import os
 import re
 from enum import Enum
 from pathlib import Path
-from typing import List, Optional
 
 from ..utils import (get_long_path_name, get_short_path_name, line_iter,
                      line_iter_b, normalize_dir, resolve)
@@ -21,8 +20,8 @@ LLVM_REPLACEMENT: str = "<LLVM_DIR>"
 MAX_PATH = 260
 
 # LLVM folder path, represented <LLVM> placeholder
-LLVM_DIR_STR: Optional[str] = None
-LLVM_DIR_SHORT_STR: Optional[str] = None
+LLVM_DIR_STR: str | None = None
+LLVM_DIR_SHORT_STR: str | None = None
 
 
 class StdStream(Enum):
@@ -149,13 +148,13 @@ def subst_basedir_with_placeholder(src_code: bytes, src_dir: Path) -> bytes:
         Returns:
             - canonicalized source code as bytes array
     """
-    result: List[bytes] = []
+    result: list[bytes] = []
 
     # iterate over src_code line by line
     line: bytes
     for line in line_iter_b(src_code):
         with contextlib.suppress(UnicodeDecodeError, ValueError, OSError):
-            path_str: Optional[str] = None
+            path_str: str | None = None
             if m := subst_basedir_with_placeholder.INCLUDE_RE.match(line):
                 path_str = m[1].decode()
             elif m := subst_basedir_with_placeholder.COMMENT_RE.match(line):
@@ -226,7 +225,7 @@ def _(path: str, is_lower=False) -> bool:
 
 
 @functools.singledispatch
-def is_subdir(path_str: str, prefix: Optional[str], is_lower=False) -> bool:
+def is_subdir(path_str: str, prefix: str | None, is_lower=False) -> bool:
     """Test if path is a subdirectory of parent."""
     if not is_lower:
         path_str = path_str.lower()
@@ -234,11 +233,11 @@ def is_subdir(path_str: str, prefix: Optional[str], is_lower=False) -> bool:
 
 
 @is_subdir.register
-def _(path: Path, prefix: Optional[str], is_lower=False) -> bool:
+def _(path: Path, prefix: str | None, is_lower=False) -> bool:
     return is_subdir(str(path), prefix, is_lower)
 
 
-def subst_with_placeholder(path_str: str, prefix: Optional[str], placeholder: str) -> Optional[str]:
+def subst_with_placeholder(path_str: str, prefix: str | None, placeholder: str) -> str | None:
     """Replace path with a placeholder."""
     if not prefix:
         return None
@@ -255,20 +254,20 @@ def subst_with_placeholder(path_str: str, prefix: Optional[str], placeholder: st
 
 
 @functools.cache
-def _get_env_path(env: str) -> Optional[Path]:
+def _get_env_path(env: str) -> Path | None:
     '''Get a path from an environment variable, and cache the result.'''
     return resolve(Path(value)) if (value := os.getenv(env)) else None
 
 
 @functools.cache
-def _get_dir_resolved(path: Path) -> Optional[Path]:
+def _get_dir_resolved(path: Path) -> Path | None:
     '''Resolve a path, if it exists.'''
     with contextlib.suppress(Exception):
         resolved = normalize_dir(resolve(path))
         return resolved if resolved != path else None
 
 
-def _get_base_dir(build_dir: Path) -> Optional[Path]:
+def _get_base_dir(build_dir: Path) -> Path | None:
     '''
     Get the base directory.
 
@@ -308,19 +307,19 @@ def _get_base_dir(build_dir: Path) -> Optional[Path]:
 BUILDDIR_STR: str = str(get_build_dir()).lower()
 
 # This is the resolved build dir, where the compiler is executed
-BUILDDIR_RESOLVED_STR: Optional[str] = str(
+BUILDDIR_RESOLVED_STR: str | None = str(
     _get_dir_resolved(Path(BUILDDIR_STR))).lower()
 
 # This is the base dir, where the source code is located
-BASEDIR_STR: Optional[str] = str(_get_base_dir(Path(BUILDDIR_STR))).lower()
+BASEDIR_STR: str | None = str(_get_base_dir(Path(BUILDDIR_STR))).lower()
 
 # This is the resolved base dir, where the source code is located
-BASEDIR_RESOLVED_STR: Optional[str] = str(_get_dir_resolved(
+BASEDIR_RESOLVED_STR: str | None = str(_get_dir_resolved(
     Path(BASEDIR_STR))).lower() if BASEDIR_STR else None
 
 
 # This is used to find the base dir in the compiler output
-BASEDIR_ESC: Optional[str] = BASEDIR_STR.replace(
+BASEDIR_ESC: str | None = BASEDIR_STR.replace(
     "\\", "/") if BASEDIR_STR is not None else None
 
 # This is the build dir, but with forward slashes
@@ -340,10 +339,10 @@ RE_STDERR: re.Pattern = re.compile(
 )
 
 # Conan folder path, represented <CONAN_USER_HOME> placeholder
-CONAN_USER_HOME: Optional[Path] = None
+CONAN_USER_HOME: Path | None = None
 
 # Qt folder path, represented <QT_DIR> placeholder
-QT_DIR_STR: Optional[str] = None
+QT_DIR_STR: str | None = None
 
 
 def _expand_conan_placeholder(conan_user_home: Path, path_str: str) -> Path:
@@ -360,7 +359,7 @@ def _expand_conan_placeholder(conan_user_home: Path, path_str: str) -> Path:
     if link_file not in _expand_conan_placeholder.cache:
         short_path = None
         if link_file.is_file():
-            with open(link_file, "r") as f:
+            with open(link_file) as f:
                 short_path = Path(os.path.normpath(f.readline()))
 
         _expand_conan_placeholder.cache[link_file] = short_path
@@ -374,7 +373,7 @@ def _expand_conan_placeholder(conan_user_home: Path, path_str: str) -> Path:
 _expand_conan_placeholder.cache = {}
 
 
-def _canonicalize_base_dir(path_str: str) -> Optional[str]:
+def _canonicalize_base_dir(path_str: str) -> str | None:
     """Return the path with the base dir replaced by the placeholder, or None if the path is not in the base dir"""
 
     if r := subst_with_placeholder(path_str, BASEDIR_STR, BASEDIR_REPLACEMENT):
@@ -385,7 +384,7 @@ def _canonicalize_base_dir(path_str: str) -> Optional[str]:
         return None
 
 
-def _canonicalize_build_dir(path_str: str) -> Optional[str]:
+def _canonicalize_build_dir(path_str: str) -> str | None:
     """Return the path with the build dir replaced by the placeholder, or None if the path is not in the build dir"""
 
     if r := subst_with_placeholder(path_str, BUILDDIR_STR, BUILDDIR_REPLACEMENT):
@@ -396,7 +395,7 @@ def _canonicalize_build_dir(path_str: str) -> Optional[str]:
         return None
 
 
-def _get_conan_user_home_short_re(hint_path: Optional[Path] = None) -> re.Pattern[str]:
+def _get_conan_user_home_short_re(hint_path: Path | None = None) -> re.Pattern[str]:
     """Get a regex to match the short Conan user home directory, either from the environment or from the hint path"""
     # sourcery skip: assign-if-exp
     if hint_path is None:
@@ -411,7 +410,7 @@ def _get_conan_user_home_short_re(hint_path: Optional[Path] = None) -> re.Patter
     return re.compile(rf"^({re_str}\\[0-9a-f]+\\1(?=\\))", re.IGNORECASE)
 
 
-def _get_conan_user_home(hint_path: Optional[Path] = None) -> Path:
+def _get_conan_user_home(hint_path: Path | None = None) -> Path:
     """
     Get the Conan user home directory, either from the environment or from the hint path
 
@@ -429,7 +428,7 @@ def _get_conan_user_home(hint_path: Optional[Path] = None) -> Path:
     return hint_path.absolute() if hint_path else Path()
 
 
-def _get_conan_user_home_re(path: Optional[Path] = None) -> re.Pattern[str]:
+def _get_conan_user_home_re(path: Path | None = None) -> re.Pattern[str]:
     '''
     Get a regex to match the Conan user home directory, either from the environment or from the hint path
 
@@ -443,7 +442,7 @@ def _get_conan_user_home_re(path: Optional[Path] = None) -> re.Pattern[str]:
     return re.compile(rf"^{home_re_str}(?=\\\.conan)", re.IGNORECASE)
 
 
-def _canonicalize_conan_dir(path_str: str) -> Optional[str]:
+def _canonicalize_conan_dir(path_str: str) -> str | None:
     '''
     Return the path with the Conan user home directory replaced by the placeholder, or None if the path is not in the Conan user home directory.
     '''
@@ -475,7 +474,7 @@ def _canonicalize_conan_dir(path_str: str) -> Optional[str]:
         short_path_dir = Path(m.group(1)).parent
         real_path_file = short_path_dir / "real_path.txt"
         if real_path_file.is_file():
-            with open(real_path_file, "r") as f:
+            with open(real_path_file) as f:
                 # Transform to long form
                 real_path = Path(f.readline())
                 path_str = str(real_path / path_str[m.end()+1:])
@@ -493,7 +492,7 @@ _canonicalize_conan_dir.RE_CONAN_USER_HOME_VENV = re.compile(
     r"^(.*\\gm-venv\\conan_[0-9a-f]+(?=\\))", re.IGNORECASE)
 
 
-def _canonicalize_toolchain_dirs(path_str: str) -> Optional[str]:
+def _canonicalize_toolchain_dirs(path_str: str) -> str | None:
     '''
     Return the path with the toolchain directories replaced by the placeholder, or None if the path is not in the toolchain directory.
     '''
@@ -501,7 +500,7 @@ def _canonicalize_toolchain_dirs(path_str: str) -> Optional[str]:
     if _canonicalize_toolchain_dirs.values is None:
         _canonicalize_toolchain_dirs.values = []
         # Order matters!
-        ENV_VARS: List[str] = [
+        ENV_VARS: list[str] = [
             "VCINSTALLDIR",
             "WindowsSdkDir",
             "ExtensionSdkDir",
@@ -537,7 +536,7 @@ def _canonicalize_toolchain_dirs(path_str: str) -> Optional[str]:
 _canonicalize_toolchain_dirs.values = None
 
 
-def _canonicalize_qt_dir(path_str: str) -> Optional[str]:
+def _canonicalize_qt_dir(path_str: str) -> str | None:
     global QT_DIR_STR
 
     if QT_DIR_STR is None:
@@ -558,7 +557,7 @@ _canonicalize_qt_dir.RE_QT_DIR = re.compile(
     rf"^(.*\\Qt)(?=\\\d+\.\d+\.\d+\\)", re.IGNORECASE)
 
 
-def _canonicalize_llvm_dir(path_str: str) -> Optional[str]:
+def _canonicalize_llvm_dir(path_str: str) -> str | None:
     if LLVM_DIR_STR and path_str.startswith(LLVM_DIR_STR):
         return path_str.replace(LLVM_DIR_STR, LLVM_REPLACEMENT, 1)
     elif LLVM_DIR_SHORT_STR and path_str.startswith(LLVM_DIR_SHORT_STR):

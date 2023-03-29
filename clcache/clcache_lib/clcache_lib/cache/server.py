@@ -5,9 +5,9 @@ import pickle
 import signal
 import subprocess as sp
 import sys
+from collections.abc import Callable
 from ctypes import windll, wintypes
 from pathlib import Path
-from typing import Callable, List
 
 import pyuv
 
@@ -162,7 +162,7 @@ class PipeServer:
                 windll.kernel32.CloseHandle(event)
 
     @staticmethod
-    def get_file_hashes(path_list: List[Path]) -> List[str]:
+    def get_file_hashes(path_list: list[Path]) -> list[str]:
         """Get file hashes from clcache server."""
         while True:
             try:

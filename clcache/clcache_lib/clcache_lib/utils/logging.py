@@ -68,13 +68,7 @@ def log(msg: str, level: LogLevel = LogLevel.TRACE, force_flush: bool = False) -
     if log.messages is not None:
         try:
             # format message with process name, process id and trace level
-            message = "[{0}] [{1}] [{2}] [{3}] {4}".format(
-                datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3],
-                f"{log.program_name} {VERSION}",
-                multiprocessing.current_process().pid,
-                level.name,
-                msg,
-            )
+            message = f'[{datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]}] [{log.program_name} {VERSION}] [{multiprocessing.current_process().pid}] [{level.name}] {msg}'
 
             # accumulate messages in a list so that they can be printed later
             log.messages.append(message)
@@ -110,6 +104,8 @@ log_win_event.pid = None
 
 # Function to log message to a file in the temp folder, named after the program and PID.
 # The file is opened and closed for each message to ensure that it is written to disk.
+
+
 def log_message_to_file(message: str):  # sourcery skip: use-contextlib-suppress
     try:
         # acquire lock to ensure that only one thread writes to the file at a time
@@ -126,11 +122,13 @@ def log_message_to_file(message: str):  # sourcery skip: use-contextlib-suppress
                 f.write(f"{message}\n")
     except Exception:
         pass
-    
+
+
 log_message_to_file.program_name = None
 log_message_to_file.pid = None
 log_message_to_file.lock = threading.Lock()
 log_message_to_file.nesting = 0
+
 
 class log_method_call:
     def __init__(self, func):
@@ -141,17 +139,20 @@ class log_method_call:
 
     def __call__(self, *args, **kwargs):
         try:
-            log_message_to_file(f"{'  ' * log_message_to_file.nesting}[[[[{self.func.__name__}: {args} / {kwargs}")
+            log_message_to_file(
+                f"{'  ' * log_message_to_file.nesting}[[[[{self.func.__name__}: {args} / {kwargs}")
             log_message_to_file.nesting += 1
             result = self.func(*args, **kwargs)
             log_message_to_file.nesting -= 1
             log_message_to_file(f"{'  ' * log_message_to_file.nesting}]]]]")
         except Exception as e:
             stack_trace = traceback.format_exc()
-            log_message_to_file(f"{'  ' * log_message_to_file.nesting}!!!!{self.func.__name__}: {stack_trace}")
+            log_message_to_file(
+                f"{'  ' * log_message_to_file.nesting}!!!!{self.func.__name__}: {stack_trace}")
             raise
         return result
-    
+
+
 def apply_decorator_to_module_functions(module):
     import contextlib
     import importlib
@@ -163,5 +164,6 @@ def apply_decorator_to_module_functions(module):
                 setattr(module, name, log_method_call(obj))
         elif inspect.ismodule(obj):
             with contextlib.suppress(ImportError):
-                sub_module = importlib.import_module(f'{module.__name__}.{name}')
+                sub_module = importlib.import_module(
+                    f'{module.__name__}.{name}')
                 apply_decorator_to_module_functions(sub_module)

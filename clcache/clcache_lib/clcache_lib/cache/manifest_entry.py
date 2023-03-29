@@ -1,6 +1,4 @@
-
 from pathlib import Path
-from typing import List
 
 from ..cache.file_cache import (CompilerArtifactsRepository, ManifestEntry,
                                 ManifestRepository)
@@ -8,7 +6,7 @@ from ..cache.hash import get_file_hashes
 from ..cache.virt import canonicalize_path
 
 
-def create_manifest_entry(manifest_hash: str, include_paths: List[Path]) -> ManifestEntry:
+def create_manifest_entry(manifest_hash: str, include_paths: list[Path]) -> ManifestEntry:
     """
     Create a manifest entry for the given manifest hash and include paths.
     """

@@ -2,7 +2,6 @@ import contextlib
 import json
 from collections import defaultdict
 from pathlib import Path
-from typing import Dict
 
 from atomicwrites import atomic_write
 
@@ -24,7 +23,7 @@ class PersistentJsonDict:
     def _load(self):
         with contextlib.suppress(Exception):
             self._mtime = self._file_name.stat().st_mtime
-            with open(self._file_name, "r") as f:
+            with open(self._file_name) as f:
                 for key, value in json.load(f).items():
                     self._dict[key] = value
 
@@ -46,12 +45,12 @@ class PersistentJsonDict:
                 self._mtime = self._file_name.stat().st_mtime
 
     @staticmethod
-    def _combine(lhs: Dict[str, int], rhs: Dict[str, int]) -> Dict[str, int]:
+    def _combine(lhs: dict[str, int], rhs: dict[str, int]) -> dict[str, int]:
         for key, value in rhs.items():
             lhs[key] += value
         return lhs
 
-    def save_combined(self, other: Dict[str, int]):
+    def save_combined(self, other: dict[str, int]):
         # do nothing if the other dictionary is empty, or all values are zero
         if not other or all(value == 0 for value in other.values()):
             return

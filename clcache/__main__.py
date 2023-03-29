@@ -12,7 +12,6 @@ import sys
 from pathlib import Path
 from shutil import which
 from types import ModuleType
-from typing import List, Optional, Tuple
 
 from clcache_lib.cache.ex import LogicException
 from clcache_lib.config import VERSION
@@ -20,7 +19,7 @@ from clcache_lib.utils.logging import LogLevel, flush_logger, init_logger, log
 from clcache_lib.utils.util import get_build_dir
 
 
-def _parse_args() -> Optional[argparse.Namespace]:
+def _parse_args() -> argparse.Namespace | None:
     '''
     Parse the command line arguments
     '''
@@ -102,7 +101,7 @@ def _parse_args() -> Optional[argparse.Namespace]:
     return options if not remainder and not options.compiler else None
 
 
-def _find_compiler_binary() -> Optional[Path]:
+def _find_compiler_binary() -> Path | None:
     if "CLCACHE_CL" in os.environ:
         path: Path = Path(os.environ["CLCACHE_CL"])
 
@@ -116,7 +115,7 @@ def _find_compiler_binary() -> Optional[Path]:
     return Path(p) if (p := which("cl.exe")) else None
 
 
-def _handle_clcache_options(clcache_options: argparse.Namespace, cache) -> Optional[int]:
+def _handle_clcache_options(clcache_options: argparse.Namespace, cache) -> int | None:
     # sourcery skip: extract-duplicate-method
     from clcache_lib.cache.cache import (clean_cache, clear_cache,
                                          print_statistics, reset_stats)
@@ -150,6 +149,7 @@ def _handle_clcache_options(clcache_options: argparse.Namespace, cache) -> Optio
             return 1
 
         cache.configuration.set_max_cache_size(max_size_value)
+        cache.configuration.save()
         print_statistics(cache)
         return 0
 
@@ -161,12 +161,13 @@ def _handle_clcache_options(clcache_options: argparse.Namespace, cache) -> Optio
             return 1
 
         cache.configuration.set_max_cache_size(max_size_value)
+        cache.configuration.save()
         print_statistics(cache)
         return 0
     
 
 
-def _get_compiler_path() -> Tuple[Path, ModuleType, List[str]]:
+def _get_compiler_path() -> tuple[Path, ModuleType, list[str]]:
 
     # Clone arguments from sys.argv
     args = sys.argv[1:].copy()
@@ -210,7 +211,7 @@ def _get_compiler_path() -> Tuple[Path, ModuleType, List[str]]:
                     if moccache_json.exists() and moccache_json.is_file():
                         # read compiler path from moccache.json
                         import json
-                        with open(moccache_json, "r") as f:
+                        with open(moccache_json) as f:
                             config = json.load(f)
                             compiler_path = Path(
                                 config["moc_path"])
@@ -219,7 +220,7 @@ def _get_compiler_path() -> Tuple[Path, ModuleType, List[str]]:
 
     else:
         raise LogicException(
-            "Unknown compiler identity: {0!s}".format(identity))
+            f"Unknown compiler identity: {identity!s}")
 
     if not (compiler_path and compiler_path.exists()):
         raise LogicException(
@@ -273,7 +274,7 @@ if __name__ == "__main__":
     except Exception as e:
         # Log exception with full traceback
         import traceback
-        log("Exception: {0!s}".format(
+        log("Exception: {!s}".format(
             traceback.format_exc()), level=LogLevel.ERROR)
         flush_logger()
 
