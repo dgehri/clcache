@@ -32,5 +32,6 @@ clcache_lib/utils/errors.py
 clcache_lib/utils/file_lock.py
 clcache_lib/utils/logging.py
 clcache_lib/utils/named_mutex.py
+clcache_lib/utils/process.py
 clcache_lib/utils/ready_event.py
 clcache_lib/utils/util.py

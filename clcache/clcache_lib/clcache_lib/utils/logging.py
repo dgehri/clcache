@@ -152,3 +152,16 @@ class log_method_call:
             raise
         return result
     
+def apply_decorator_to_module_functions(module):
+    import contextlib
+    import importlib
+    import inspect
+    for name in dir(module):
+        obj = getattr(module, name)
+        if callable(obj) and not inspect.isclass(obj):
+            if name not in ['log_method_call', 'log_win_event', 'log', 'flush_logger', '_combine', 'log_message_to_file']:
+                setattr(module, name, log_method_call(obj))
+        elif inspect.ismodule(obj):
+            with contextlib.suppress(ImportError):
+                sub_module = importlib.import_module(f'{module.__name__}.{name}')
+                apply_decorator_to_module_functions(sub_module)

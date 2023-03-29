@@ -16,7 +16,8 @@ from typing import List, Optional, Tuple
 
 from clcache_lib.cache.ex import LogicException
 from clcache_lib.config import VERSION
-from clcache_lib.utils.logging import LogLevel, flush_logger, init_logger, log
+from clcache_lib.utils.logging import (LogLevel, flush_logger, init_logger,
+                                       log, log_win_event)
 from clcache_lib.utils.util import get_build_dir
 
 
@@ -90,7 +91,7 @@ def _parse_args() -> Optional[argparse.Namespace]:
         nargs=argparse.REMAINDER,
         help="Optional arguments for the compiler executable."
     )
-    
+
     if len(sys.argv) == 1:
         parser.print_help()
         sys.exit(0)
@@ -163,6 +164,7 @@ def _handle_clcache_options(clcache_options: argparse.Namespace, cache) -> Optio
         cache.configuration.set_max_cache_size(max_size_value)
         print_statistics(cache)
         return 0
+    
 
 
 def _get_compiler_path() -> Tuple[Path, ModuleType, List[str]]:
@@ -190,7 +192,7 @@ def _get_compiler_path() -> Tuple[Path, ModuleType, List[str]]:
 
         if compiler_path is None:
             compiler_path = _find_compiler_binary()
-
+            
     elif identity == "moccache":
         compiler_pkg = __import__(
             "clcache_lib.moc.compiler", fromlist=["compiler"])
@@ -225,6 +227,8 @@ def _get_compiler_path() -> Tuple[Path, ModuleType, List[str]]:
 
 
 def main() -> int:
+    log_win_event(f"{sys.argv[1:]}")
+
     clcache_options = _parse_args()
     if clcache_options is not None and clcache_options.run_server is not None:
         # Run clcache server
@@ -270,8 +274,7 @@ if __name__ == "__main__":
         log("Exception: {0!s}".format(
             traceback.format_exc()), level=LogLevel.ERROR)
         flush_logger()
-        
-        traceback.print_exc()
+
         sys.exit(1)
     finally:
         flush_logger()

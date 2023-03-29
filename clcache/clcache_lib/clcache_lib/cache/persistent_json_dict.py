@@ -45,17 +45,18 @@ class PersistentJsonDict:
 
                 self._mtime = self._file_name.stat().st_mtime
 
+    @staticmethod
+    def _combine(lhs: Dict[str, int], rhs: Dict[str, int]) -> Dict[str, int]:
+        for key, value in rhs.items():
+            lhs[key] += value
+        return lhs
+
     def save_combined(self, other: Dict[str, int]):
         # do nothing if the other dictionary is empty, or all values are zero
         if not other or all(value == 0 for value in other.values()):
             return
 
-        def _combine(d: Dict[str, int]) -> Dict[str, int]:
-            for key, value in other.items():
-                d[key] += value
-            return d
-
-        self.save(_combine)
+        self.save(lambda lhs: self._combine(lhs, other))
 
     def __getitem__(self, key):
         return self._dict[key]

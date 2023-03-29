@@ -22,6 +22,8 @@ from ..utils.args import (ArgumentT1, ArgumentT2, ArgumentT3, ArgumentT4,
                           CommandLineAnalyzer, expand_response_file,
                           split_comands_file)
 from ..utils.errors import *
+from ..utils.logging import log_message_to_file
+from ..utils.process import create_process_and_capture_output
 from ..utils.util import line_iter, print_stdout_and_stderr
 
 
@@ -72,21 +74,15 @@ def _invoke_real_compiler(compiler_path: Path,
     environment.pop("VS_UNICODE_OUTPUT", None)
 
     return_code: int = -1
-    # Intercept only stdout
-    sys.stderr.flush()
-    with TemporaryFile() as stdout_file:
-        compiler_process = subprocess.Popen(
-            read_cmd_line, stdout=stdout_file, stderr=subprocess.STDOUT, env=environment
-        )
-        return_code = compiler_process.wait()
-        stdout_file.seek(0)
-        stdout = stdout_file.read().decode(CL_DEFAULT_CODEC)
+
+    return_code, stdout, stderr = create_process_and_capture_output(
+        env_vars=environment, command=read_cmd_line, encoding=CL_DEFAULT_CODEC)
 
     log("Real compiler return code: {0:d}".format(
         return_code), force_flush=True)
 
     sanitized_stdout = _sanitize_stdout(stdout)
-    print_binary(sys.stdout, sanitized_stdout.encode(CL_DEFAULT_CODEC))
+    print_stdout_and_stderr(sanitized_stdout, stderr, CL_DEFAULT_CODEC)
     return return_code
 
 
@@ -122,20 +118,13 @@ def _capture_real_compiler(compiler_path: Path,
 
     return_code: int = -1
 
-    # Don't use subprocess.communicate() here, it's slow due to internal
-    # threading.
-    with TemporaryFile() as stdout_file, TemporaryFile() as stderr_file:
-        compiler_process = subprocess.Popen(
-            read_cmd_line, stdout=stdout_file, stderr=stderr_file, env=environment
-        )
-        return_code = compiler_process.wait()
-        stdout_file.seek(0)
-        stdout = stdout_file.read().decode(CL_DEFAULT_CODEC)
-        stderr_file.seek(0)
-        stderr = stderr_file.read().decode(CL_DEFAULT_CODEC)
+    log_message_to_file(f"Invoking real compiler: {' '.join(read_cmd_line)}")
+    return_code, stdout, stderr = create_process_and_capture_output(
+        env_vars=environment, command=read_cmd_line, encoding=CL_DEFAULT_CODEC)
+    log_message_to_file(
+        f"Real compiler returned code: {return_code} / {hex(return_code)}")
 
-    log("Real compiler returned code: {0:d}".format(
-        return_code), force_flush=True)
+    log(f"Real compiler returned code: {return_code}")
     return return_code, _sanitize_stdout(stdout), stderr
 
 
