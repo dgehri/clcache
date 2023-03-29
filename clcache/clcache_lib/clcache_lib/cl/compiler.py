@@ -22,8 +22,7 @@ from ..utils.args import (ArgumentT1, ArgumentT2, ArgumentT3, ArgumentT4,
                           CommandLineAnalyzer, expand_response_file,
                           split_comands_file)
 from ..utils.errors import *
-from ..utils.logging import log_message_to_file
-from ..utils.process import create_process_and_capture_output
+from ..utils.safe_exec import safe_execute
 from ..utils.util import line_iter, print_stdout_and_stderr
 
 
@@ -52,11 +51,11 @@ def _invoke_real_compiler(compiler_path: Path,
     '''Invoke the real compiler and return its exit code.'''
     set_llvm_dir(compiler_path)
 
-    read_cmd_line = [str(compiler_path)] + cmd_line
+    real_cmd_line = [str(compiler_path)] + cmd_line
 
     # if command line longer than 32767 chars, use a response file
     # See https://devblogs.microsoft.com/oldnewthing/20031210-00/?p=41553
-    if len(" ".join(read_cmd_line)) >= 32000:  # keep some chars as a safety margin
+    if len(" ".join(real_cmd_line)) >= 32000:  # keep some chars as a safety margin
         with TemporaryFile(mode="wt", suffix=".rsp") as rsp_file:
             rsp_file.writelines(" ".join(cmd_line) + "\n")
             rsp_file.flush()
@@ -65,7 +64,7 @@ def _invoke_real_compiler(compiler_path: Path,
                 [f"@{os.path.realpath(rsp_file.name)}"]
             )
 
-    log(f"Invoking compiler: {' '.join(read_cmd_line)}")
+    log(f"Invoking compiler: {' '.join(real_cmd_line)}")
 
     # Environment variable set by the Visual Studio IDE to make cl.exe write
     # Unicode output to named pipes instead of stdout. Unset it to make sure
@@ -73,17 +72,8 @@ def _invoke_real_compiler(compiler_path: Path,
     environment = dict(os.environ)
     environment.pop("VS_UNICODE_OUTPUT", None)
 
-    return_code: int = -1
-
-    return_code, stdout, stderr = create_process_and_capture_output(
-        env_vars=environment, command=read_cmd_line, encoding=CL_DEFAULT_CODEC)
-
-    log("Real compiler return code: {0:d}".format(
-        return_code), force_flush=True)
-
-    sanitized_stdout = _sanitize_stdout(stdout)
-    print_stdout_and_stderr(sanitized_stdout, stderr, CL_DEFAULT_CODEC)
-    return return_code
+    sys.stderr.flush()
+    return subprocess.call(real_cmd_line, env=environment)
 
 
 def _capture_real_compiler(compiler_path: Path,
@@ -118,16 +108,24 @@ def _capture_real_compiler(compiler_path: Path,
 
     return_code: int = -1
 
-    log_message_to_file(f"Invoking real compiler: {' '.join(read_cmd_line)}")
-    return_code, stdout, stderr = create_process_and_capture_output(
-        env_vars=environment, command=read_cmd_line, encoding=CL_DEFAULT_CODEC)
-    log_message_to_file(
-        f"Real compiler returned code: {return_code} / {hex(return_code)}")
+    # Don't use subprocess.communicate() here, it's slow due to internal
+    # threading.
+    with TemporaryFile() as stdout_file, \
+            TemporaryFile() as stderr_file:
+        compiler_process = subprocess.Popen(
+            read_cmd_line, stdout=stdout_file, stderr=stderr_file, env=environment
+        )
+        return_code = compiler_process.wait()
+        stdout_file.seek(0)
+        stdout = stdout_file.read().decode(CL_DEFAULT_CODEC)
+        stderr_file.seek(0)
+        stderr = stderr_file.read().decode(CL_DEFAULT_CODEC)
 
-    log(f"Real compiler returned code: {return_code}")
+    log("Real compiler returned code: {0:d}".format(
+        return_code), force_flush=True)
     return return_code, _sanitize_stdout(stdout), stderr
 
-
+@safe_execute
 def process_compile_request(cache: Cache, compiler_path: Path, args: List[str]) -> int:
     '''
     Process a compile request.

@@ -1,6 +1,5 @@
 import contextlib
 import hashlib
-import inspect
 import re
 from typing import BinaryIO, Dict
 
@@ -17,7 +16,6 @@ from ..config import (COUCHBASE_ACCESS_TIMEOUT, COUCHBASE_CONNECT_TIMEOUT,
                       COUCHBASE_EXPIRATION)
 from .couchbase_ex import RawBinaryTranscoderEx
 from .file_cache import *
-from ..utils.logging import log_method_call, log_win_event
 
 HashAlgorithm = hashlib.md5
 

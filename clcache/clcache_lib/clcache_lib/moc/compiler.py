@@ -24,6 +24,7 @@ from ..utils.args import (ArgumentQtLong, ArgumentQtLongWithParam,
 from ..utils.errors import *
 from ..utils.file_lock import FileLock
 from ..utils.logging import LogLevel, log
+from ..utils.safe_exec import safe_execute
 from ..utils.util import (correct_case_path, line_iter_b,
                           print_stdout_and_stderr)
 
@@ -216,6 +217,7 @@ def _capture_real_compiler(compiler_path: Path,
     return return_code, stdout, stderr
 
 
+@safe_execute
 def process_compile_request(cache: Cache, compiler: Path, args: List[str]) -> int:
     '''
     Process a compile request.

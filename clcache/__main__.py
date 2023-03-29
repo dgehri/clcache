@@ -16,8 +16,7 @@ from typing import List, Optional, Tuple
 
 from clcache_lib.cache.ex import LogicException
 from clcache_lib.config import VERSION
-from clcache_lib.utils.logging import (LogLevel, flush_logger, init_logger,
-                                       log, log_win_event)
+from clcache_lib.utils.logging import LogLevel, flush_logger, init_logger, log
 from clcache_lib.utils.util import get_build_dir
 
 
@@ -182,7 +181,12 @@ def _get_compiler_path() -> Tuple[Path, ModuleType, List[str]]:
         compiler_path = Path(args.pop(0))
 
     # Find out if we are running as clcache or moccache
-    identity = Path(sys.argv[0]).stem.lower()
+    self = Path(sys.argv[0])
+    if self.name.lower() == "__main__.py":
+        identity = self.parent.name.lower()
+    else:
+        identity = self.stem.lower()
+        
     if compiler_path and compiler_path.name.lower() == "moc.exe":
         identity = "moccache"
 
@@ -227,8 +231,6 @@ def _get_compiler_path() -> Tuple[Path, ModuleType, List[str]]:
 
 
 def main() -> int:
-    log_win_event(f"{sys.argv[1:]}")
-
     clcache_options = _parse_args()
     if clcache_options is not None and clcache_options.run_server is not None:
         # Run clcache server
