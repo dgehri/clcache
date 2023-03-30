@@ -1,16 +1,16 @@
-from conans import ConanFile
-from conan.tools.files import rename, rmdir
+from conans import ConanFile # type: ignore
+from conan.tools.files import rename
 
 class ClcacheConan(ConanFile):
     name = "clcache"
-    version = "4.4.4aa"
+    version = "4.4.4"
     author = "Daniel Gehriger <dgehriger@globusmedical.com>"
     settings = "os", "arch"
     description = "A compiler cache for Microsoft Visual Studio"
     url = "https://github.com/dgehri/clcache"
     license = "https://github.com/dgehri/clcache/blob/master/LICENSE"
     user = "dgehri"
-    channel = "dev"
+    channel = "stable"
 
     def package(self):
         # Copy clcache.exe to bin and rename to moccache.exe
@@ -33,6 +33,6 @@ class ClcacheConan(ConanFile):
     def package_info(self):
         self.cpp_info.libs = []
 
-    def configure(self):
-        if self.settings.os != "Windows" or self.settings.arch != "x86_64":
+    def configure(self):  # sourcery skip: raise-specific-error
+        if self.settings.os != "Windows" or self.settings.arch != "x86_64": # type: ignore
             raise Exception("This package does not support this configuration")

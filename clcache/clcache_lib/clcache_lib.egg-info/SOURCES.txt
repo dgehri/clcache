@@ -35,3 +35,4 @@ clcache_lib/utils/named_mutex.py
 clcache_lib/utils/ready_event.py
 clcache_lib/utils/safe_exec.py
 clcache_lib/utils/util.py
+clcache_lib/utils/win_evt_log.py

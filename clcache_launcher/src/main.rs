@@ -20,6 +20,9 @@ fn main() {
         // try again, but remove CLCACHE_COUCHBASE environment variable
         env.remove("CLCACHE_COUCHBASE");
 
+        // cause clcache to log an error
+        env.insert("CLCACHE_ACCESS_VIOLATION".to_string(), "1".to_string());
+
         exit_code = launch(&env);
     }
 
