@@ -23,7 +23,6 @@ from ..utils.args import (ArgumentQtLong, ArgumentQtLongWithParam,
 from ..utils.errors import *
 from ..utils.file_lock import FileLock
 from ..utils.logging import LogLevel, log
-from ..utils.safe_exec import safe_execute
 from ..utils.util import (correct_case_path, line_iter_b,
                           print_stdout_and_stderr)
 
@@ -117,8 +116,7 @@ class MocCommandLineAnalyzer(CommandLineAnalyzer):
             Input header files and output moc file.
         '''
 
-        options, input_files = self.parse_args_and_input_files(
-            cmdline)
+        args, input_files = self.parse_args_and_input_files(cmdline)
 
         # Now collect the inputFiles into the return format
         if not input_files:
@@ -126,21 +124,21 @@ class MocCommandLineAnalyzer(CommandLineAnalyzer):
 
         input_file = input_files[0]
 
-        if "E" in options:
+        if "E" in args:
             raise CalledForPreprocessingError()
 
-        if "output-json" in options or "collect-json" in options:
+        if "output-json" in args or "collect-json" in args:
             raise CalledForJsonOutputError()
 
         output_file = None
-        if "o" in options and options["o"][0]:
-            output_file = Path(options["o"][0])
+        if "o" in args and args["o"][0]:
+            output_file = Path(args["o"][0])
         else:
             raise CalledWithoutOutputFile()
 
         log(f"MOC input file: {input_file}")
         log(f"MOC output file: {output_file}")
-        return input_file, output_file, options
+        return input_file, output_file, args
 
 
 def _invoke_real_compiler(compiler_path: Path,
@@ -216,7 +214,6 @@ def _capture_real_compiler(compiler_path: Path,
     return return_code, stdout, stderr
 
 
-@safe_execute
 def process_compile_request(cache: Cache, compiler: Path, args: list[str]) -> int:
     '''
     Process a compile request.
@@ -532,10 +529,7 @@ def _get_manifest_hash(compiler_path: Path,
     '''
     compiler_hash = get_compiler_hash(compiler_path)
 
-    (
-        args,
-        input_files,
-    ) = MocCommandLineAnalyzer().parse_args_and_input_files(cmd_line)
+    args, input_files = analyzer.parse_args_and_input_files(cmd_line)
 
     assert input_files
     input_file = input_files[0]

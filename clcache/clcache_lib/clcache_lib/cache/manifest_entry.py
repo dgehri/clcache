@@ -18,8 +18,8 @@ def create_manifest_entry(manifest_hash: str, include_paths: list[Path]) -> Mani
     content_hash = ManifestRepository.get_includes_content_hash_for_hashes(
         include_hashes
     )
-    cachekey = CompilerArtifactsRepository.compute_key(
+    objectHash = CompilerArtifactsRepository.compute_key(
         manifest_hash, content_hash
     )
 
-    return ManifestEntry(safe_includes, content_hash, cachekey)
+    return ManifestEntry(safe_includes, content_hash, objectHash)

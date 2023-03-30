@@ -254,9 +254,16 @@ def subst_with_placeholder(path_str: str, prefix: str | None, placeholder: str) 
 
 
 @functools.cache
-def _get_env_path(env: str) -> Path | None:
+def _get_env_path(name: str) -> Path | None:
     '''Get a path from an environment variable, and cache the result.'''
-    return resolve(Path(value)) if (value := os.getenv(env)) else None
+    if "/" in name:
+        var = name.split("/")[0]
+        suffix = name[len(var) + 1:]
+    else:
+        var = name
+        suffix = "."
+
+    return resolve(Path(value) / suffix) if (value := os.getenv(var)) else None
 
 
 @functools.cache
@@ -505,6 +512,8 @@ def _canonicalize_toolchain_dirs(path_str: str) -> str | None:
             "WindowsSdkDir",
             "ExtensionSdkDir",
             "VSINSTALLDIR",
+            "NETFXSDKDir/..",
+            "UniversalCRTSdkDir",
             "CommonProgramFiles",
             "CommonProgramFiles(x86)",
             "ProgramFiles",
@@ -514,16 +523,23 @@ def _canonicalize_toolchain_dirs(path_str: str) -> str | None:
             "SystemRoot",
             "SystemDrive",
         ]
-        for var in ENV_VARS:
+        for name in ENV_VARS:
+            if "/" in name:
+                var = name.split("/")[0]
+                suffix = name[len(var) + 1:]
+            else:
+                var = name
+                suffix = "."
+                
             if value := os.environ.get(var):
-                long_path = os.path.realpath(os.path.normpath(value)).lower()
+                long_path = os.path.realpath(os.path.normpath(os.path.join(value, suffix))).lower()
                 short_path = str(get_short_path_name(Path(long_path))).lower()
                 if short_path != long_path:
                     _canonicalize_toolchain_dirs.values.append(
-                        (var, long_path, short_path))
+                        (name, long_path, short_path))
                 else:
                     _canonicalize_toolchain_dirs.values.append(
-                        (var, long_path, None))
+                        (name, long_path, None))
 
     for var, long_path, short_path in _canonicalize_toolchain_dirs.values:
         if short_path and path_str.startswith(short_path + os.path.sep):

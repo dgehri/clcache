@@ -3,7 +3,7 @@ from conan.tools.files import rename
 
 class ClcacheConan(ConanFile):
     name = "clcache"
-    version = "4.4.5"
+    version = "4.4.6"
     author = "Daniel Gehriger <dgehriger@globusmedical.com>"
     settings = "os", "arch"
     description = "A compiler cache for Microsoft Visual Studio"

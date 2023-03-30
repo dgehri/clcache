@@ -1,8 +1,8 @@
 from datetime import timedelta
 import os
 
-VERSION = "4.4.5-dgehri"
-CACHE_VERSION = "9"
+VERSION = "4.4.6-dgehri"
+CACHE_VERSION = "10"
 
 COUCHBASE_EXPIRATION = timedelta(days=3)
 COUCHBASE_CONNECT_TIMEOUT = timedelta(seconds=int(os.environ.get("CLCACHE_COUCHBASE_CONNECT_TIMEOUT", 1)))

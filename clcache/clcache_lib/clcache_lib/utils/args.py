@@ -1,6 +1,7 @@
 import codecs
 from collections import defaultdict
 from pathlib import Path
+from typing import Callable
 
 from ..utils.errors import *
 
@@ -85,7 +86,7 @@ def split_comands_file(content):
     return CommandLineTokenizer(content).argv
 
 
-def expand_response_file(cmdline : list[str]) -> list[str]:
+def expand_response_file(cmdline: list[str]) -> list[str]:
     '''
     Expand command line arguments that start with @ to the contents of the (response) file.
     '''
@@ -131,8 +132,13 @@ def expand_response_file(cmdline : list[str]) -> list[str]:
 
 
 class Argument:
-    def __init__(self, name):
+    def __init__(self,
+                 name: str,
+                 mapped_name: str | None = None,
+                 getter: Callable[[str | None], list[str | None]] | None = None) -> None:
         self.name = name
+        self.mapped_name = mapped_name or name
+        self._getter = getter or (lambda x: [x])
 
     def __len__(self):
         return len(self.name)
@@ -147,6 +153,9 @@ class Argument:
     def __hash__(self):
         key = (type(self), self.name)
         return hash(key)
+
+    def get_values(self, value: str | None) -> list[str | None]:
+        return self._getter(value)
 
 
 class ArgumentNoParam(Argument):
@@ -300,7 +309,7 @@ class CommandLineAnalyzer:
             if arg_str.startswith(('/', '-')):
                 if arg := self._get_parametrized_arg_type(arg_str):
                     i, value = self._parse_arg(arg, cmdline, i)
-                    arguments[arg.name].append(value)
+                    arguments[arg.mapped_name].extend(arg.get_values(value))
                 else:
                     # name not followed by parameter in this case
                     arguments[arg_str[1:]].append(None)

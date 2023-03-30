@@ -22,7 +22,6 @@ from ..utils.args import (ArgumentT1, ArgumentT2, ArgumentT3, ArgumentT4,
                           CommandLineAnalyzer, expand_response_file,
                           split_comands_file)
 from ..utils.errors import *
-from ..utils.safe_exec import safe_execute
 from ..utils.util import line_iter, print_stdout_and_stderr
 
 
@@ -125,7 +124,7 @@ def _capture_real_compiler(compiler_path: Path,
         return_code), force_flush=True)
     return return_code, _sanitize_stdout(stdout), stderr
 
-@safe_execute
+
 def process_compile_request(cache: Cache, compiler_path: Path, args: list[str]) -> int:
     '''
     Process a compile request.
@@ -253,9 +252,11 @@ class ClCommandLineAnalyzer(CommandLineAnalyzer):
             ArgumentT3("wo"),
             ArgumentT3("W"),
             ArgumentT3("V"),
-            ArgumentT3("imsvc"),
-            ArgumentT3("external:I"),
-            ArgumentT3("external:env"),
+            ArgumentT3("imsvc", mapped_name="I"),
+            ArgumentT3("external:I", mapped_name="I"),
+            ArgumentT3("external:env:", \
+                       mapped_name="I", \
+                       getter=lambda value: os.environ.get(value, "").split(";")),  # type: ignore
             # /NAME parameter
             ArgumentT4("Xclang"),
         }
@@ -291,43 +292,42 @@ class ClCommandLineAnalyzer(CommandLineAnalyzer):
             cmdline: The command line to analyze.
 
         Returns:
-            A tuple of two lists. The first list contains tuples of input files 
-            and their type (either /Tp or /Tc). 
+            A tuple of two lists. The first list contains tuples of input files
+            and their type (either /Tp or /Tc).
             The second list contains output (object) files.
         '''
 
-        options, orig_input_files = self.parse_args_and_input_files(
-            cmdline)
+        args, orig_input_files = self.parse_args_and_input_files(cmdline)
 
         # Use an override pattern to shadow input files that have
         # already been specified in the function above
         input_file_dict = {f: "" for f in orig_input_files}
         compl = False
-        if "Tp" in options:
-            input_file_dict |= {Path(f): "/Tp" for f in options["Tp"]}
+        if "Tp" in args:
+            input_file_dict |= {Path(f): "/Tp" for f in args["Tp"]}
             compl = True
-        if "Tc" in options:
-            input_file_dict |= {Path(f): "/Tc" for f in options["Tc"]}
+        if "Tc" in args:
+            input_file_dict |= {Path(f): "/Tc" for f in args["Tc"]}
             compl = True
 
-        # Now collect the inputFiles into the return format
+        # Now collect the input_file_dict into the return format
         input_files = list(input_file_dict.items())
         if not input_files:
             raise NoSourceFileError()
 
         for opt in ["E", "EP", "P"]:
-            if opt in options:
+            if opt in args:
                 raise CalledForPreprocessingError()
 
         # Technically, it would be possible to support /Zi: we'd just need to
         # copy the generated .pdb files into/out of the cache.
-        if "Zi" in options:
+        if "Zi" in args:
             raise ExternalDebugInfoError()
 
-        if "Yc" in options or "Yu" in options:
+        if "Yc" in args or "Yu" in args:
             raise CalledWithPchError()
 
-        if "link" in options or "c" not in options:
+        if "link" in args or "c" not in args:
             raise CalledForLinkError()
 
         if len(input_files) > 1 and compl:
@@ -335,9 +335,9 @@ class ClCommandLineAnalyzer(CommandLineAnalyzer):
 
         obj_files = None
         output_folder = Path()
-        if "Fo" in options and options["Fo"][0]:
+        if "Fo" in args and args["Fo"][0]:
             # Determine output file name from /Fo option
-            path_name = Path(options["Fo"][0])
+            path_name = Path(args["Fo"][0])
             if path_name.is_dir():
                 output_folder = path_name
             elif len(input_file_dict) == 1:
@@ -359,7 +359,7 @@ def _job_count(cmd_line: list[str]) -> int:
     '''
     Returns the amount of jobs
 
-    Returns the amount of jobs which should be run in parallel when 
+    Returns the amount of jobs which should be run in parallel when
     invoked in batch mode as determined by the /MP argument.
     '''
     mp_switches = [arg for arg in cmd_line if re.match(r"^/MP(\d+)?$", arg)]
@@ -633,6 +633,7 @@ def _process(cache: Cache,
                 else:
                     miss_reason = MissReason.SOURCE_CHANGED_MISS
             except Exception:
+                log(f"Exception occurred: {traceback.format_exc()}", LogLevel.ERROR)
                 cache.statistics.record_cache_miss(MissReason.CACHE_FAILURE)
                 raise
 
@@ -717,10 +718,12 @@ def _get_manifest_hash(compiler_path: Path,
     '''
     compiler_hash = get_compiler_hash(compiler_path)
 
-    (
-        args,
-        input_files,
-    ) = ClCommandLineAnalyzer().parse_args_and_input_files(cmd_line)
+    args, input_files = analyzer.parse_args_and_input_files(cmd_line)
+
+    # Append the content of the INCLUDE environment variable to the list of include files
+    # to ensure that the manifest hash is different if the INCLUDE environment variable
+    # changes.
+    args["I"].extend(os.environ.get("INCLUDE", "").split(";"))
 
     def canonicalize_path_arg(arg: Path):
         return canonicalize_path(arg.absolute())
@@ -752,7 +755,9 @@ def _get_manifest_hash(compiler_path: Path,
     return get_file_hash(src_file, toolset_data)
 
 
-def _parse_includes_set(compiler_output: str, src_file: Path, strip: bool) -> tuple[list[Path], str]:
+def _parse_includes_set(compiler_output: str,
+                        src_file: Path,
+                        strip: bool) -> tuple[list[Path], str]:
     """
     Parse the compiler output and return a set of include file paths.
 
