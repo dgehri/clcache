@@ -62,6 +62,9 @@ def get_file_hashes(path_list: list[Path]) -> list[str]:
     if server_timeout_secs := _get_sever_timeout_seconds():
         try:
             return _get_file_hashes_from_server(server_timeout_secs, path_list)
+        except FileNotFoundError:
+            # This is expected
+            raise
         except Exception as e:
             log(f"Failed to use server: {traceback.format_exc()}",
                 LogLevel.ERROR)

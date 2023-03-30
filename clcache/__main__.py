@@ -9,10 +9,10 @@
 import os
 import sys
 
+from clcache_lib.actions import (get_compiler_path, handle_clcache_options,
+                                 parse_args)
 from clcache_lib.utils.logging import LogLevel, flush_logger, init_logger, log
 from clcache_lib.utils.util import get_build_dir
-
-from args import get_compiler_path, handle_clcache_options, parse_args
 
 
 def main() -> int:
