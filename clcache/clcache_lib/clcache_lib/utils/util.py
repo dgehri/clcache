@@ -1,26 +1,33 @@
 import ctypes
 import functools
+import glob
 import os
+import re
 import sys
 import threading
 from ctypes import wintypes
 from pathlib import Path
-from shutil import copyfile, copyfileobj, rmtree, which
-from typing import Generator, Optional
+from shutil import rmtree
+from collections.abc import Generator
 
-import lz4.frame
 import scandir
 
 OUTPUT_LOCK = threading.Lock()
 
 
+def get_program_name() -> str:
+    return Path(sys.argv[0]).stem
+
+
 def print_binary(stream, data: bytes):
     with OUTPUT_LOCK:
-        # split raw_data into chunks of 8192 bytes and write them to the stream
-        for i in range(0, len(data), 8192):
-            stream.buffer.write(data[i:i + 8192])
-
+        stream.buffer.write(data)
         stream.flush()
+
+
+def print_stdout_and_stderr(out: str, err: str, encoding: str):
+    print_binary(sys.stdout, out.encode(encoding))
+    print_binary(sys.stderr, err.encode(encoding))
 
 
 @functools.cache
@@ -126,97 +133,79 @@ def ensure_dir_exists(path: Path):
         raise
 
 
-def line_iter(str: str, strip=False) -> Generator[str, None, None]:
-    '''Iterate over lines in a string, separated by newline characters.'''
-    pos = -1
+def line_iter(str: str) -> Generator[str, None, None]:
+    '''
+    Iterate over lines in a string, separated by newline characters.
+
+    The returned lines include the newline character.
+    '''
+    pos = 0
     while True:
-        next_pos = str.find('\n', pos + 1)
+        next_pos = str.find('\n', pos)
         if next_pos < 0:
+            yield str[pos:]
             break
-        line = str[pos + 1:next_pos]
-        yield line.rstrip("\r\n") if strip else line
-        pos = next_pos
+        yield str[pos:next_pos+1]
+        pos = next_pos+1
 
 
-def line_iter_b(str: bytes, strip=False) -> Generator[bytes, None, None]:
-    '''Iterate over lines in a bytestring, separated by newline characters.'''
-    pos = -1
+def line_iter_b(str: bytes) -> Generator[bytes, None, None]:
+    '''
+    Iterate over lines in a string, separated by newline characters.
+
+    The returned lines include the newline character.
+    '''
+    pos = 0
     while True:
-        next_pos = str.find(b'\n', pos + 1)
+        next_pos = str.find(b'\n', pos)
         if next_pos < 0:
+            yield str[pos:]
             break
-        line = str[pos + 1:next_pos]
-        yield line.rstrip(b"\r\n") if strip else line
-        pos = next_pos
+        yield str[pos:next_pos+1]
+        pos = next_pos+1
 
 
-def find_compiler_binary() -> Optional[Path]:
-    if "CLCACHE_CL" in os.environ:
-        path: Path = Path(os.environ["CLCACHE_CL"])
-
-        # If the path is not absolute, try to find it in the PATH
-        if path.name == path:
-            if p := which(path):
-                path = Path(p)
-
-        return path if path is not None and path.exists() else None
-
-    return Path(p) if (p := which("cl.exe")) else None
-
-
-def copy_from_cache(src_file: Path, dst_file: Path):
+@functools.cache
+def get_build_dir() -> Path:
     '''
-    Copy a file from the cache.
+    Get the build directory.
 
-    Parameters:
-        src_file_path: Path to the source file.
-        dst_file_path: Path to the destination file.
+    Get the build directory from the CLCACHE_BUILDDIR environment 
+    variable. If it is not set, use the current working directory 
+    to determine it.
     '''
-    ensure_dir_exists(dst_file.absolute().parent)
+    def impl():
+        if value := os.environ.get("CLCACHE_BUILDDIR"):
+            build_dir = Path(value)
+            if build_dir.exists():
+                return normalize_dir(build_dir)
 
-    temp_dst: Path = dst_file.parent / f"{dst_file.name}.tmp"
+        # walk up the directory tree, starting at the current working directory,
+        # to find the build directory, as determined by the existence of the
+        # CMakeCache.txt file
+        for path in [Path.cwd()] + list(Path.cwd().parents):
+            if (path / "CMakeCache.txt").exists():
+                return normalize_dir(path)
 
-    if os.path.exists(f"{src_file}.lz4"):
-        with lz4.frame.open(f"{src_file}.lz4", mode="rb") as file_in:
-            with open(temp_dst, "wb") as file_out:
-                copyfileobj(file_in, file_out)  # type: ignore
-    else:
-        copyfile(src_file, temp_dst)
+        return normalize_dir(Path.cwd())
 
-    temp_dst.replace(dst_file)
+    result = impl()
+    return result
 
 
-def copy_to_cache(src_file_path: Path, dst_file_path: Path) -> int:
+@functools.cache
+def normalize_dir(dir_path: Path) -> Path:
     '''
-    Copy a file to the cache.
+    Normalize a directory path, removing trailing slashes.
 
-    Parameters:
-        src_file_path: Path to the source file.
-        dst_file_path: Path to the destination file.
-
-    Returns:
-        The size of the file in bytes, after compression.
+    This is a workaround for https://bugs.python.org/issue9949
     '''
-    ensure_dir_exists(dst_file_path.parent)
-
-    temp_dst: Path = dst_file_path.parent / f"{dst_file_path.name}.tmp"
-    dst_file_path = dst_file_path.parent / f"{dst_file_path.name}.lz4"
-    with open(src_file_path, "rb") as file_in:
-        with lz4.frame.open(temp_dst, mode="wb") as file_out:
-            copyfileobj(file_in, file_out)  # type: ignore
-
-    temp_dst.replace(dst_file_path)
-    return dst_file_path.stat().st_size
+    result = os.path.normcase(os.path.abspath(os.path.normpath(str(dir_path))))
+    if result.endswith(os.path.sep):
+        result = result[:-1]
+    return Path(result)
 
 
-def trace(msg: str, level=1) -> None:
-    logLevel = int(os.getenv("CLCACHE_LOG", 0))
-    if logLevel >= level:
-        scriptDir = os.path.realpath(os.path.dirname(sys.argv[0]))
-        with OUTPUT_LOCK:
-            print(os.path.join(scriptDir, "clcache.py") + " " + msg, flush=True)
-
-
-def error(message: str):
-    with OUTPUT_LOCK:
-        print(message, file=sys.stderr, flush=True)
+def correct_case_path(path: Path) -> Path:
+    pattern = re.sub(r'([^:/\\])(?=[/\\]|$)', r'[\1]', os.path.normpath(path))
+    return Path(r[0]) if (r := glob.glob(pattern)) else path

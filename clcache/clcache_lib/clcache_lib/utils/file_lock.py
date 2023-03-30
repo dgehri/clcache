@@ -1,12 +1,13 @@
+import datetime
 from ctypes import windll, wintypes
 from pathlib import Path
 
-# import datetime
-from .ex import CacheLockException
 
-# from ..utils import trace
+class FileLockException(Exception):
+    pass
 
-class CacheLock:
+
+class FileLock:
     """Implements a lock for the object cache which
     can be used in 'with' statements."""
 
@@ -18,7 +19,8 @@ class CacheLock:
         self._mutex_name = "Local\\" + mutex_name
         self._mutex = None
         self._timeout_ms = timeout_ms
-        # self._t0 = None
+        self._t0 = None
+        self._acquired = False
 
     def create_mutex(self):
         self._mutex = windll.kernel32.CreateMutexW(
@@ -37,8 +39,7 @@ class CacheLock:
             windll.kernel32.CloseHandle(self._mutex)
 
     def acquire(self):
-        # trace(f"Acquiring lock {self._mutexName}...", 0)
-        # self._t0 = datetime.datetime.now()
+        t0 = datetime.datetime.now()
         if not self._mutex:
             self.create_mutex()
         result = windll.kernel32.WaitForSingleObject(
@@ -52,19 +53,38 @@ class CacheLock:
                 error_string = "Error! WaitForSingleObject returns {result}, last error {error}".format(
                     result=result, error=windll.kernel32.GetLastError()
                 )
-            # trace(errorString, 0)                
-            raise CacheLockException(error_string)
+            from ..utils.logging import LogLevel, log
+            log(error_string, LogLevel.ERROR)
+            raise FileLockException(error_string)
+
+        self._acquired = True
+        self._t0 = datetime.datetime.now()
         
-        # elapsed = (datetime.datetime.now() - self._t0).total_seconds()
-        # trace(f"Acquired lock {self._mutexName} after {elapsed:.3f} s", 0)
+        elapsed = (self._t0  - t0).total_seconds()
+        if elapsed > 2:
+            from ..utils.logging import LogLevel, log
+            log(
+                f"Waited for lock {self._mutex_name} during {elapsed:.1f} s",
+                LogLevel.TRACE,
+            )
 
     def release(self):
-        windll.kernel32.ReleaseMutex(self._mutex)
-        # elapsed = (datetime.datetime.now() - self._t0).total_seconds()
-        # trace(f"Released lock {self._mutexName} after {elapsed:.3f} s", 0)
-        
+        if self._acquired:
+            self._acquired = False
+            t0 = self._t0
+            windll.kernel32.ReleaseMutex(self._mutex)
+            
+            if t0:
+                elapsed = (datetime.datetime.now() - t0).total_seconds()
+                if elapsed > 2:
+                    from ..utils.logging import LogLevel, log
+                    log(
+                        f"Held lock for {self._mutex_name} during {elapsed:.1f} s",
+                        LogLevel.TRACE,
+                    )
+
     @staticmethod
     def for_path(path: Path):
         timeout_ms = 10 * 1000
         lock_name = str(path).replace(":", "-").replace("\\", "-")
-        return CacheLock(lock_name, timeout_ms)
+        return FileLock(lock_name, timeout_ms)

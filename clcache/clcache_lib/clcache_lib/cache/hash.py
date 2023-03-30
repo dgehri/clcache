@@ -1,24 +1,16 @@
-import errno
 import functools
 import hashlib
 import os
-import pickle
-from ctypes import windll, wintypes
+import traceback
 from pathlib import Path
-from typing import List, Optional
 
-from ..cache.server import PIPE_NAME, spawn_server
+from ..cache.server import PipeServer, spawn_server
 from ..config import CACHE_VERSION
 from ..config.config import HASH_SERVER_TIMEOUT
-from ..utils.util import trace
+from ..utils.logging import LogLevel, log
 from .virt import is_in_build_dir, subst_basedir_with_placeholder
 
 HashAlgorithm = hashlib.md5
-BUFFER_SIZE = 65536
-
-# Define some Win32 API constants here to avoid dependency on win32pipe
-NMPWAIT_WAIT_FOREVER = wintypes.DWORD(0xFFFFFFFF)
-ERROR_PIPE_BUSY = 231
 
 
 def get_compiler_hash(compiler_path: Path) -> str:
@@ -40,7 +32,7 @@ def get_compiler_hash(compiler_path: Path) -> str:
     return get_string_hash(data)
 
 
-def _get_sever_timeout_seconds() -> Optional[int]:
+def _get_sever_timeout_seconds() -> int | None:
     '''
     Returns the timeout for the hash server in seconds.
 
@@ -57,7 +49,7 @@ def _get_sever_timeout_seconds() -> Optional[int]:
         return None
 
 
-def get_file_hashes(path_list: List[Path]) -> List[str]:
+def get_file_hashes(path_list: list[Path]) -> list[str]:
     '''
     Returns the hashes of the given files.
 
@@ -67,39 +59,52 @@ def get_file_hashes(path_list: List[Path]) -> List[str]:
     Returns:
         The hashes of the files.
     '''
-
     if server_timeout_secs := _get_sever_timeout_seconds():
         try:
-            if not spawn_server(server_timeout_secs):
-                raise OSError("Server didn't start in time")
-
-            while True:
-                try:
-                    with open(PIPE_NAME, "w+b") as f:
-                        f.write("\n".join(map(str, path_list)).encode("utf-8"))
-                        f.write(b"\x00")
-                        response = f.read()
-                        if response.startswith(b"!"):
-                            raise pickle.loads(response[1:-1])
-                        return response[:-1].decode("utf-8").splitlines()
-                except OSError as e:
-                    if (
-                        e.errno == errno.EINVAL
-                        and windll.kernel32.GetLastError() == ERROR_PIPE_BUSY
-                    ):
-                        # All pipe instances are busy, wait until available
-                        windll.kernel32.WaitNamedPipeW(
-                            PIPE_NAME, NMPWAIT_WAIT_FOREVER)
-                    else:
-                        raise
+            return _get_file_hashes_from_server(server_timeout_secs, path_list)
+        except FileNotFoundError:
+            # This is expected
+            raise
         except Exception as e:
-            trace(f"Failed to use server: {e}", 1)
+            log(f"Failed to use server: {traceback.format_exc()}",
+                LogLevel.ERROR)
 
     return [get_file_hash(path) for path in path_list]
 
 
+def _get_file_hashes_from_server(server_timeout_secs, path_list):
+    if not spawn_server(server_timeout_secs):
+        raise OSError("Server didn't start in time")
+
+    # Split path_list into paths in build dir and paths not in build dir,
+    # and remember original index into original list
+    build_dir_paths = []
+    other_paths = []
+    is_build_dir = []
+    for path in path_list:
+        if is_in_build_dir(path):
+            build_dir_paths.append(path)
+            is_build_dir.append(True)
+        else:
+            other_paths.append(path)
+            is_build_dir.append(False)
+
+    other_hashes = PipeServer.get_file_hashes(other_paths)
+    build_dir_hashes = [get_file_hash(path)
+                        for path in build_dir_paths]
+
+    # Recombine hashes in original order
+    hashes = []
+    for i in range(len(path_list)):
+        if is_build_dir[i]:
+            hashes.append(build_dir_hashes.pop(0))
+        else:
+            hashes.append(other_hashes.pop(0))
+    return hashes
+
+
 @functools.cache
-def get_file_hash(path: Path, toolset_data: Optional[str] = None) -> str:
+def get_file_hash(path: Path, toolset_data: str | None = None) -> str:
     '''
     Returns the hash of the given file.
 
@@ -126,14 +131,14 @@ def get_file_hash(path: Path, toolset_data: Optional[str] = None) -> str:
             src_content = subst_basedir_with_placeholder(f.read(),  src_dir)
             hasher.update(src_content)
 
-    trace(f"File hash: {path} => {hasher.hexdigest()}", 2)
+    # log(f"File hash: {path.as_posix()} => {hasher.hexdigest()}", 2)
 
     if toolset_data is not None:
         # Encoding of this additional data does not really matter
         # as long as we keep it fixed, otherwise hashes change.
         # The string should fit into ASCII, so UTF8 should not change anything
         hasher.update(toolset_data.encode("UTF-8"))
-        trace(f"AdditionalData Hash: {hasher.hexdigest()}: {toolset_data}", 2)
+        # log(f"AdditionalData Hash: {hasher.hexdigest()}: {toolset_data}", 2)
 
     return hasher.hexdigest()
 

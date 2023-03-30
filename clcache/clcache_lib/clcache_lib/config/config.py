@@ -1,12 +1,12 @@
-
 from datetime import timedelta
+import os
 
-VERSION = "4.4.2-dgehri"
-CACHE_VERSION = "9"
+VERSION = "4.4.6-dgehri"
+CACHE_VERSION = "10"
 
 COUCHBASE_EXPIRATION = timedelta(days=3)
-COUCHBASE_CONNECT_TIMEOUT = timedelta(seconds=1)
-COUCHBASE_GET_TIMEOUT = timedelta(seconds=4)
+COUCHBASE_CONNECT_TIMEOUT = timedelta(seconds=int(os.environ.get("CLCACHE_COUCHBASE_CONNECT_TIMEOUT", 1)))
+COUCHBASE_ACCESS_TIMEOUT = timedelta(seconds=int(os.environ.get("CLCACHE_COUCHBASE_ACCESS_TIMEOUT", 10)))
 
 # The cl default codec
 CL_DEFAULT_CODEC = "mbcs"
@@ -22,4 +22,4 @@ MAX_MANIFEST_HASHES = 100
 # 
 # Use of the cache server can be disabled entirely by setting the environment
 # variable CLCACHE_SERVER_TIMEOUT_MINUTES to 0.
-HASH_SERVER_TIMEOUT = timedelta(seconds=60)
+HASH_SERVER_TIMEOUT = timedelta(seconds=180)

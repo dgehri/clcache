@@ -1,7 +1,6 @@
 from collections import defaultdict
 from enum import Enum
 from pathlib import Path
-from typing import Dict
 
 from .persistent_json_dict import PersistentJsonDict
 
@@ -89,7 +88,7 @@ class PersistentStats:
         return self.get(CacheStats.CACHE_SIZE)
 
     def set_cache_size_and_entries(self, size: int, entries: int):
-        def callback(d: Dict[str, int]) -> Dict[str, int]:
+        def callback(d: dict[str, int]) -> dict[str, int]:
             d[CacheStats.CACHE_SIZE.value] = size
             d[CacheStats.CACHE_ENTRIES.value] = entries
             return d
@@ -97,7 +96,7 @@ class PersistentStats:
         self._dict.save(callback)
 
     def reset(self):
-        def callback(d: Dict[str, int]) -> Dict[str, int]:
+        def callback(d: dict[str, int]) -> dict[str, int]:
             for attribute in MissReason:
                 d[attribute.value] = 0
 

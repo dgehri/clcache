@@ -2,11 +2,10 @@ import contextlib
 import json
 from collections import defaultdict
 from pathlib import Path
-from typing import Dict
 
 from atomicwrites import atomic_write
 
-from .cache_lock import CacheLock
+from ..utils.file_lock import FileLock
 
 
 class PersistentJsonDict:
@@ -17,20 +16,20 @@ class PersistentJsonDict:
         self._file_name = file_name
         self._dict = defaultdict(int)
         self._mtime = None
-        with CacheLock.for_path(file_name):
+        with FileLock.for_path(file_name):
             if self._file_name.exists():
                 self._load()
 
     def _load(self):
         with contextlib.suppress(Exception):
             self._mtime = self._file_name.stat().st_mtime
-            with open(self._file_name, "r") as f:
+            with open(self._file_name) as f:
                 for key, value in json.load(f).items():
                     self._dict[key] = value
 
     def save(self, callback=None):
         with contextlib.suppress(Exception):
-            with CacheLock.for_path(self._file_name):
+            with FileLock.for_path(self._file_name):
 
                 # if on-disk file has changed, reload it first
                 if self._file_name.exists() and self._mtime != self._file_name.stat().st_mtime:
@@ -45,17 +44,18 @@ class PersistentJsonDict:
 
                 self._mtime = self._file_name.stat().st_mtime
 
-    def save_combined(self, other: Dict[str, int]):
+    @staticmethod
+    def _combine(lhs: dict[str, int], rhs: dict[str, int]) -> dict[str, int]:
+        for key, value in rhs.items():
+            lhs[key] += value
+        return lhs
+
+    def save_combined(self, other: dict[str, int]):
         # do nothing if the other dictionary is empty, or all values are zero
         if not other or all(value == 0 for value in other.values()):
             return
 
-        def _combine(d: Dict[str, int]) -> Dict[str, int]:
-            for key, value in other.items():
-                d[key] += value
-            return d
-
-        self.save(_combine)
+        self.save(lambda lhs: self._combine(lhs, other))
 
     def __getitem__(self, key):
         return self._dict[key]

@@ -6,101 +6,21 @@
 # full text of which is available in the accompanying LICENSE file at the
 # root directory of this project.
 #
-import argparse
 import os
 import sys
-from pathlib import Path
-from typing import Optional
 
-from clcache_lib.config import VERSION
-
-
-def parse_args() -> argparse.Namespace:
-    '''Parse the command line arguments'''
-    class CommandCheckAction(argparse.Action):
-        def __call__(self, parser, namespace, values, optional_string=None):
-            if values and not values.lower().endswith(".exe"):
-                setattr(namespace, "non_command", values)
-                return
-            setattr(namespace, self.dest, values)
-
-    class RemainderSetAction(argparse.Action):
-        def __call__(self, parser, namespace, values, optional_string=None):
-            if nonCommand := getattr(namespace, "non_command", None):
-                values.insert(0, nonCommand)
-            setattr(namespace, self.dest, values)
-
-    parser = argparse.ArgumentParser(description=f"clcache.py v{VERSION}")
-    # Handle the clcache standalone actions, only one can be used at a time
-    group_parser = parser.add_mutually_exclusive_group()
-    group_parser.add_argument(
-        "-s",
-        "--stats",
-        dest="show_stats",
-        action="store_true",
-        help="Print cache statistics",
-    )
-    group_parser.add_argument(
-        "-c", "--clean", dest="clean_cache", action="store_true", help="Clean cache"
-    )
-    group_parser.add_argument(
-        "-C", "--clear", dest="clear_cache", action="store_true", help="Clear cache"
-    )
-    group_parser.add_argument(
-        "-z",
-        "--reset",
-        dest="reset_stats",
-        action="store_true",
-        help="Reset cache statistics",
-    )
-    group_parser.add_argument(
-        "-M",
-        "--set-size",
-        dest="cache_size",
-        type=int,
-        default=None,
-        help="Set maximum cache size (in bytes)",
-    )
-    group_parser.add_argument(
-        "--set-size-gb",
-        dest="cache_size_gb",
-        type=int,
-        default=None,
-        help="Set maximum cache size (in GB)",
-    )
-    group_parser.add_argument(
-        "--run-server",
-        dest="run_server",
-        type=int,
-        default=None,
-        help="Run clcache server (optional timeout in seconds)",
-    )
-
-    # This argument need to be optional, or it will be required for the status commands above
-    parser.add_argument(
-        "compiler",
-        default=None,
-        action=CommandCheckAction,
-        nargs="?",
-        help="Optional path to compile executable. If not "
-        "present look in CLCACHE_CL environment variable "
-        "or search PATH for exe.",
-    )
-    parser.add_argument(
-        "compiler_args",
-        action=RemainderSetAction,
-        nargs=argparse.REMAINDER,
-        help="Arguments to the compiler",
-    )
-
-    return parser.parse_args()
+from clcache_lib.actions import (get_compiler_path, handle_clcache_options,
+                                 parse_args)
+from clcache_lib.utils.logging import LogLevel, flush_logger, init_logger, log
+from clcache_lib.utils.util import get_build_dir
 
 
-def main() -> int:  # sourcery skip: de-morgan, extract-duplicate-method
+def main() -> int:
+    if "CLCACHE_ACCESS_VIOLATION" in os.environ:
+        log("Recovering from access violation", LogLevel.ERROR)
     
-    options = parse_args()
-
-    if options.run_server is not None:
+    clcache_options = parse_args()
+    if clcache_options is not None and clcache_options.run_server is not None:
         # Run clcache server
         from clcache_lib.cache.server import PipeServer
 
@@ -108,83 +28,42 @@ def main() -> int:  # sourcery skip: de-morgan, extract-duplicate-method
             return 0
 
         # we are the first instance
-        server = PipeServer(timeout_s=options.run_server)
+        server = PipeServer(timeout_s=clcache_options.run_server)
         return server.run()
 
-    from clcache_lib.cache.cache import (Cache, clean_cache, clear_cache,
-                                         print_statistics, reset_stats)
-    from clcache_lib.cache.ex import LogicException
-    from clcache_lib.cache.virt import set_llvm_dir
-    from clcache_lib.cl.compiler import invoke_real_compiler
-    from clcache_lib.clcache import process_compile_request
-    from clcache_lib.utils.util import find_compiler_binary, trace
+    from clcache_lib.cache.cache import Cache
 
     with Cache() as cache:
 
-        if options.show_stats:
-            print_statistics(cache)
-            return 0
+        if clcache_options is not None:
+            exit_code = handle_clcache_options(clcache_options, cache)
+            if exit_code is not None:
+                return exit_code
 
-        if options.clean_cache:
-            clean_cache(cache)
-            print("Cache cleaned")
-            return 0
-
-        if options.clear_cache:
-            clear_cache(cache)
-            print("Cache cleared")
-            print_statistics(cache)
-            return 0
-
-        if options.reset_stats:
-            reset_stats(cache)
-            print("Statistics reset")
-            print_statistics(cache)
-            return 0
-
-        if options.cache_size_gb is not None:
-            max_size_value = options.cache_size_gb * 1024 * 1024 * 1024
-            if max_size_value < 1:
-                print("Max size argument must be greater than 0.", file=sys.stderr)
-                return 1
-
-            cache.configuration.set_max_cache_size(max_size_value)
-            print_statistics(cache)
-            return 0
-
-        if options.cache_size is not None:
-            max_size_value = options.cache_size
-            if max_size_value < 1:
-                print("Max size argument must be greater than 0.", file=sys.stderr)
-                return 1
-
-            cache.configuration.set_max_cache_size(max_size_value)
-            print_statistics(cache)
-            return 0
-
-        compiler: Optional[Path] = options.compiler or find_compiler_binary()
-        if not (compiler and os.access(compiler, os.F_OK)):
-            print(
-                "Failed to locate specified compiler, or exe on PATH (and CLCACHE_CL is not set), aborting."
-            )
-            return 1
-
-        # Extract the compiler folder from the compiler path
-        set_llvm_dir(compiler)
-
-        trace("Found real compiler binary at '{0!s}'".format(compiler))
-        trace(f"Arguments we care about: '{sys.argv}'")
-
-        # Determine CL_
+        compiler_path, compiler_pkg, args = get_compiler_path()
 
         if "CLCACHE_DISABLE" in os.environ:
-            return invoke_real_compiler(compiler, options.compiler_args)[0]
-        try:
-            return process_compile_request(cache, compiler, options.compiler_args)
-        except LogicException as e:
-            print(e)
-            return 1
+            return compiler_pkg.invoke_real_compiler(compiler_path, args)[0]
+
+        return compiler_pkg.process_compile_request(cache, compiler_path, args)
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        # get build folder
+        build_dir = get_build_dir()
+
+        # initialize logger if environment variable is set
+        if "CLCACHE_DISABLE_LOGGING" not in os.environ:
+            init_logger(build_dir)
+
+        sys.exit(main())
+    except Exception as e:
+        # Log exception with full traceback
+        import traceback
+        log("Exception: {!s}".format(
+            traceback.format_exc()), level=LogLevel.ERROR, force_flush=True)
+
+        sys.exit(1)
+    finally:
+        flush_logger()

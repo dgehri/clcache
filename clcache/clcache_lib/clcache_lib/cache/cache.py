@@ -1,25 +1,33 @@
 import contextlib
 import os
+from collections.abc import Callable
+from enum import IntEnum
 from pathlib import Path
-from typing import Callable, Optional, Tuple
+from typing import BinaryIO
 
 from ..config.config import VERSION
-
-from .stats import CacheStats, MissReason, PersistentStats, Stats
-from ..utils.util import trace
+from ..utils.logging import LogLevel, log
 from .file_cache import CacheFileStrategy, CompilerArtifacts
+from .stats import CacheStats, MissReason, PersistentStats, Stats
 
 
+class Location(IntEnum):
+    LOCAL = 1,
+    REMOTE = 2,
+    LOCAL_AND_REMOTE = 3
+    
 class Cache:
-    def __init__(self, cache_dir: Optional[Path] = None):
+    def __init__(self, cache_dir: Path | None = None):
         if url := os.environ.get("CLCACHE_COUCHBASE"):
             try:
-                from .remote_cache import CacheFileWithCouchbaseFallbackStrategy
+                from .remote_cache import \
+                    CacheFileWithCouchbaseFallbackStrategy
                 self.strategy = CacheFileWithCouchbaseFallbackStrategy(
-                    url, cacheDirectory=cache_dir)
+                    url, cache_dir=cache_dir)
                 return
             except Exception as e:
-                trace(f"Failed to initialize Couchbase cache using {url}")
+                log(
+                    f"Failed to initialize Couchbase cache using {url}", LogLevel.WARN)
 
         self.strategy = CacheFileStrategy(cache_dir=cache_dir)
 
@@ -71,7 +79,7 @@ class Cache:
     def set_entry(self, key: str, value):
         return self.strategy.set_entry(key, value)
 
-    def has_entry(self, cachekey) -> Tuple[bool, bool]:
+    def has_entry(self, cachekey) -> bool:
         '''
         Returns true if the cache contains an entry for the given key.
 
@@ -80,11 +88,11 @@ class Cache:
         '''
         return self.strategy.has_entry(cachekey)
 
-    def set_manifest(self, manifest_hash, manifest):
-        return self.strategy.set_manifest(manifest_hash, manifest)
+    def set_manifest(self, manifest_hash, manifest, location = Location.LOCAL_AND_REMOTE):
+        return self.strategy.set_manifest(manifest_hash, manifest, location)
 
-    def get_manifest(self, manifest_hash):
-        return self.strategy.get_manifest(manifest_hash)
+    def get_manifest(self, manifest_hash: str, skip_remote: bool=False):
+        return self.strategy.get_manifest(manifest_hash, skip_remote)
 
 
 def clean_cache(cache: Cache):
@@ -97,27 +105,76 @@ def clear_cache(cache: Cache):
         cache.clear()
 
 
-def add_object_to_cache(cache: Cache,
-                        cache_key: str,
-                        artifacts: CompilerArtifacts,
-                        reason: MissReason,
-                        action: Optional[Callable[[], int]] = None):
+def ensure_artifacts_exist(cache: Cache,
+                           cache_key: str,
+                           reason: MissReason,
+                           payload: Path,
+                           compiler_result: tuple[int, str, str],
+                           canonicalize_stdout: None | (Callable[[
+                               str], str]) = None,
+                           canonicalize_stderr: None | (Callable[[
+                               str], str]) = None,
+                           post_commit_action: None | (Callable[[
+                           ], int]) = None,
+                           output_file_filter: Callable[[BinaryIO, BinaryIO], None] | None = None
+                           ) -> tuple[int, str, str]:
+    '''
+    Ensure that the artifacts for the given cache key exist.
 
-    size = 0
+    Parameters:
+        cache: The cache to use.
+        cache_key: The cache key to use.
+        reason: The reason for the cache miss.
+        payload: The path to the payload file.
+        compiler_result: The result of the compiler invocation.
+        canonicalize_stdout: A function to canonicalize the compiler stdout.
+        canonicalize_stderr: A function to canonicalize the compiler stderr.
+        post_commit_action: An action to execute after the cache entry was added.
+        output_file_filter: A function to filter the output files.
+
+    Returns:
+        tuple[int, str, str]: A tuple containing the exit code, stdout and stderr.
+    '''
+    return_code, compiler_stdout, compiler_stderr = compiler_result
+    if return_code == 0 and payload.exists():
+        artifacts = CompilerArtifacts(
+            payload,
+            canonicalize_stdout(
+                compiler_stdout) if canonicalize_stdout else compiler_stdout,
+            canonicalize_stderr(
+                compiler_stderr) if canonicalize_stderr else compiler_stderr,
+            output_file_filter
+        )
+
+        log(
+            f"Adding file {artifacts.payload_path} to cache using key {cache_key}")
+
+        _add_object_to_cache(cache, cache_key, artifacts,
+                             reason, post_commit_action)
+
+    return return_code, compiler_stdout, compiler_stderr
+
+
+def _add_object_to_cache(cache: Cache,
+                         cache_key: str,
+                         artifacts: CompilerArtifacts,
+                         reason: MissReason,
+                         post_commit_action: Callable[[], int] | None = None):
+
+    size: int = 0
 
     with cache.lock_for(cache_key):
-        hit, _ = cache.has_entry(cache_key)
         # If the cache entry is not present, add it.
-        if not hit:
+        if not cache.has_entry(cache_key):
             cache.statistics.register_cache_entry(reason)
 
             size = cache.set_entry(cache_key, artifacts)
             if size is None:
-                size = os.path.getsize(artifacts.obj_file_path)
+                size = os.path.getsize(artifacts.payload_path)
 
-    if action:
+    if post_commit_action:
         # Always execute the action, even if the cache entry was present.
-        size += action()
+        size += post_commit_action()
 
     cache.statistics.register_cache_entry_size(size)
 

@@ -1,12 +1,11 @@
-from typing import Tuple, Union
 
 from couchbase.transcoder import *  # type: ignore
 
 
 class RawBinaryTranscoderEx(Transcoder):
     def encode_value(
-        self, value  # type: Union[bytes,bytearray]
-    ) -> Tuple[bytes, int]:
+        self, value: Union[bytes,bytearray]
+    ) -> tuple[bytes, int]:
 
         if not isinstance(value, (bytes, (bytearray, memoryview))):
             raise ValueFormatException(
@@ -18,8 +17,8 @@ class RawBinaryTranscoderEx(Transcoder):
 
     def decode_value(
         self,
-        value,  # type: bytes
-        flags,  # type: int
+        value: bytes,
+        flags: int
     ) -> bytes:
 
         fmt = get_decode_format(flags)
