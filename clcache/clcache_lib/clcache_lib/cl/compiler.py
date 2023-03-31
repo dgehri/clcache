@@ -723,7 +723,9 @@ def _get_manifest_hash(compiler_path: Path,
     # Append the content of the INCLUDE environment variable to the list of include files
     # to ensure that the manifest hash is different if the INCLUDE environment variable
     # changes.
-    args["I"].extend(os.environ.get("INCLUDE", "").split(";"))
+    include_env = os.environ.get("INCLUDE", "")
+    args["I"].extend(include_env.split(";"))
+    log(f"INCLUDE env var: {include_env}", LogLevel.TRACE)
 
     def canonicalize_path_arg(arg: Path):
         return canonicalize_path(arg.absolute())
