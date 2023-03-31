@@ -410,7 +410,7 @@ def _get_conan_user_home_short_re(hint_path: Path | None = None) -> re.Pattern[s
             hint_path = Path(v)
 
     if hint_path is None:
-        re_str = rf"[a-z]:\.conan"
+        re_str = rf"[a-z]:\\\.conan"
     else:
         re_str = re.escape(str(hint_path))
 
