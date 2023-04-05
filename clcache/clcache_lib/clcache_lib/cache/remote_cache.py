@@ -9,6 +9,7 @@ from couchbase.collection import Collection
 from couchbase.options import (ClusterOptions, ClusterTimeoutOptions,
                                GetAndTouchOptions, RemoveOptions, TouchOptions,
                                UpsertOptions)
+from couchbase.exceptions import (DocumentNotFoundException)
 
 from ..cache.cache import Location
 from ..cache.stats import MissReason
@@ -119,15 +120,17 @@ class CacheCouchbaseStrategy:
     def __str__(self):
         return f"Remote Couchbase {self.host}"
 
-    def _fetch_entry(self, key: str) -> bool | None:
+    def _fetch_entry(self, key: str) -> bool:
         try:
             return self._fetch_entry_impl(key)
+        except DocumentNotFoundException:
+            pass
         except Exception:
             self._is_bad = True
-            self._cache[key] = None
-            return None
+        self._cache[key] = None
+        return False
 
-    def _fetch_entry_impl(self, key: str) -> bool | None:
+    def _fetch_entry_impl(self, key: str) -> bool:
         '''Fetches an entry from the cache and stores it in self.cache.'''
 
         res = self._coll_objects.get_and_touch(key, COUCHBASE_EXPIRATION,
@@ -141,7 +144,7 @@ class CacheCouchbaseStrategy:
                 or "md5" not in payload \
                 or "stdout" not in payload \
                 or "stderr" not in payload:
-            return None
+            return False
 
         chunk_count = payload["chunk_count"]
         obj_data = []
@@ -167,7 +170,7 @@ class CacheCouchbaseStrategy:
                                                     RemoveOptions(timeout=COUCHBASE_ACCESS_TIMEOUT))  # type: ignore
                 verify_success(res)
 
-            return None
+            return False
 
         payload["obj"] = b"".join(obj_data)
         self._cache[key] = payload
@@ -181,7 +184,7 @@ class CacheCouchbaseStrategy:
             A tuple of (has entry, is local cache entry).
         '''
         in_cache = key in self._cache and self._cache[key] is not None
-        return in_cache or self._fetch_entry(key) is not None
+        return in_cache or self._fetch_entry(key)
 
     def get_entry_as_payload(self, key: str) -> dict | None:
         '''
@@ -201,15 +204,17 @@ class CacheCouchbaseStrategy:
         Returns:
             The number of bytes stored in the cache. 0 if the entry was not stored.
         '''
-        if not self._is_bad:
-            try:
-                with open(compressed_payload_path, "rb") as obj_file:
-                    self._set_entry_from_compressed_file(
-                        obj_file, key, artifacts)
-            except Exception:
-                self._is_bad = True
-                log(f"Could not set {key} in remote cache",
-                    level=LogLevel.TRACE)
+        if self._is_bad:
+            return
+
+        try:
+            with open(compressed_payload_path, "rb") as obj_file:
+                self._set_entry_from_compressed_file(
+                    obj_file, key, artifacts)
+        except Exception:
+            self._is_bad = True
+            log(f"Could not set {key} in remote cache",
+                level=LogLevel.TRACE)
 
     def _set_entry_from_compressed_file(self,
                                         obj_file: BinaryIO,
@@ -320,10 +325,14 @@ class CacheCouchbaseStrategy:
                     for e in res.content_as[dict]["entries"]
                 ]
             )
+        except DocumentNotFoundException:
+            pass
         except Exception:
-            self._cache[key] = None
             self._is_bad = True
-            return None
+
+        # invalidate cache entry
+        self._cache[key] = None
+        return None
 
 
 class CacheFileWithCouchbaseFallbackStrategy:
