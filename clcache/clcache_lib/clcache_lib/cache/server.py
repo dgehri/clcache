@@ -171,7 +171,7 @@ class PipeServer:
                     f.write(b"\x00")
                     response = f.read()
                     if response.startswith(b"!"):
-                        raise pickle.loads(response[1:-1])
+                        raise runtime_error(response[1:-1].decode("utf-8"))
                     return response[:-1].decode("utf-8").splitlines()
             except OSError as e:
                 if (

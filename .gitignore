@@ -22,4 +22,6 @@ stats.txt
 clcache_4.2.1_nuitka.rar
 clcache_4.2.1-20211230_nuitka.rar
 venv_py3.10/
-clcache_launcher/target/
+clcache_launcher/target/**
+clcache_server/target/**
+pyuv/**
