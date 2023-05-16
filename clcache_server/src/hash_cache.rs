@@ -31,6 +31,7 @@ type FileHashDict = HashMap<String, HashEntry>;
 type DirectoryToFileHashDict = DashMap<PathBuf, FileHashDict>;
 
 /// The behavior of the file system watcher.
+#[derive(Debug, Clone, Copy)]
 pub enum WatchBehavior {
     /// Watch file and remove from cache if it changes
     MonitorForChanges,

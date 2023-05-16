@@ -38,7 +38,11 @@ struct Args {
     monitoring_mode: MonitoringMode,
 
     /// Sets non-default ID to be used by the server (for testing purposes)
-    #[arg(long = "id", required = false, default_value = "626763c0-bebe-11ed-a901-0800200c9a66-1")]
+    #[arg(
+        long = "id",
+        required = false,
+        default_value = "626763c0-bebe-11ed-a901-0800200c9a66-1"
+    )]
     id: String,
 
     /// Set verbosity level (repeat for more verbose output)
@@ -79,7 +83,7 @@ async fn main() -> io::Result<()> {
         MonitoringMode::Timestamp => hash_cache::WatchBehavior::DoNotMonitor,
         MonitoringMode::Watch => hash_cache::WatchBehavior::MonitorForChanges,
     };
-    
+
     let timeout = Duration::from_secs(args.timeout);
 
     // Create the hash cache.
@@ -252,4 +256,116 @@ async fn handle_client(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use rand::{Rng, RngCore};
+    use std::{fs, io::Write, path::PathBuf};
+
+    use crate::hash_cache;
+
+    struct TestFiles {
+        temp_dir: tempfile::TempDir,
+        test_files: Vec<PathBuf>,
+        files_to_modify: Vec<PathBuf>,
+    }
+
+    impl TestFiles {
+        fn new() -> Self {
+            // create a temp directory
+            let temp_dir = tempfile::tempdir().unwrap();
+
+            // inside, create 10000 files with random content, evenly spread over 100 directories
+            // and mark 50 files for later modification
+            let mut rng = rand::thread_rng();
+            let mut files_to_modify = Vec::new();
+            let mut test_files = Vec::new();
+            for i in 0..10 {
+                let dir = temp_dir.path().join(format!("dir{}", i));
+                fs::create_dir(&dir).unwrap();
+                for j in 0..100 {
+                    let file = dir.join(format!("file{}", j));
+                    test_files.push(file.clone());
+                    let mut f = fs::File::create(&file).unwrap();
+                    let mut buf = [0; 1024];
+                    rng.fill_bytes(&mut buf);
+                    f.write_all(&buf).unwrap();
+                    if rng.gen_bool(0.005) {
+                        files_to_modify.push(file);
+                    }
+                }
+            }
+
+            TestFiles {
+                temp_dir,
+                test_files,
+                files_to_modify,
+            }
+        }
+
+        fn info(&self) {
+            println!("Will be modifying {} files", self.files_to_modify.len());
+
+            // count number of unique directories for modified files
+            let mut unique_dirs = std::collections::HashSet::new();
+            for file in &self.files_to_modify {
+                unique_dirs.insert(file.parent().unwrap().to_path_buf());
+            }
+            println!("Will be modifying {} directories", unique_dirs.len());
+        }
+    }
+
+    #[tokio::test]
+    async fn performance_test_file_watcher() {
+        let test_files = TestFiles::new();
+        test_files.info();
+
+        test_impl(&test_files, hash_cache::WatchBehavior::DoNotMonitor).await;
+        test_impl(&test_files, hash_cache::WatchBehavior::MonitorForChanges).await;
+        test_impl(&test_files, hash_cache::WatchBehavior::DoNotMonitor).await;
+        test_impl(&test_files, hash_cache::WatchBehavior::MonitorForChanges).await;
+    }
+
+    async fn test_impl(test_files: &TestFiles, watch_behavior: hash_cache::WatchBehavior) {
+        println!("Measuring performance for {:?}", watch_behavior);
+
+        let cache = std::sync::Arc::new(crate::hash_cache::HashCache::new(watch_behavior));
+
+        // record current time
+        let start = std::time::Instant::now();
+
+        // request hashes for all files
+        for file in &test_files.test_files {
+            cache
+                .get_file_hash(file, crate::hash_cache::WatchBehavior::MonitorForChanges)
+                .await
+                .unwrap();
+        }
+
+        // print elapsed time
+        println!("Elapsed time: {:?}", start.elapsed());
+
+        // modify files
+        for file in &test_files.files_to_modify {
+            let mut f = fs::File::create(file).unwrap();
+            let mut buf = [0; 1024];
+            rand::thread_rng().fill_bytes(&mut buf);
+            f.write_all(&buf).unwrap();
+        }
+
+        // record current time
+        let start = std::time::Instant::now();
+
+        // request hashes for all files
+        for file in &test_files.test_files {
+            cache
+                .get_file_hash(file, crate::hash_cache::WatchBehavior::MonitorForChanges)
+                .await
+                .unwrap();
+        }
+
+        // print elapsed time
+        println!("Elapsed time: {:?}", start.elapsed());
+    }
 }
