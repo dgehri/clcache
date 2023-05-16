@@ -16,6 +16,15 @@ mod hash_cache;
 
 use event::signal_event;
 
+#[derive(clap::ValueEnum, Clone, Debug)]
+enum MonitoringMode {
+    /// Use timestamp of the file to detect changes
+    Timestamp,
+
+    /// Watch filesystem for changes
+    Watch,
+}
+
 /// Lightweight server to calculate MD5 hashes of files.
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -24,8 +33,12 @@ struct Args {
     #[arg(long = "idle-timeout", default_value = "180")]
     timeout: u64,
 
+    /// File monitoring mode
+    #[arg(long = "monitoring-mode", default_value = "watch", value_enum)]
+    monitoring_mode: MonitoringMode,
+
     /// Sets non-default ID to be used by the server (for testing purposes)
-    #[arg(long = "id", required = false)]
+    #[arg(long = "id", required = false, default_value = "626763c0-bebe-11ed-a901-0800200c9a66-1")]
     id: String,
 
     /// Set verbosity level (repeat for more verbose output)
@@ -47,13 +60,11 @@ async fn main() -> io::Result<()> {
     };
     let _ = env_logger::builder()
         .filter_module("clcache", verbosity)
+        .format_timestamp_millis()
         .try_init();
 
-    let mut server_id = "626763c0-bebe-11ed-a901-0800200c9a66-1";
-    if !args.id.is_empty() {
-        server_id = &args.id;
-    }
-
+    // Get the server ID from the command line arguments.
+    let server_id = &args.id;
     let pipe_name = format!(r"\\.\pipe\\LOCAL\\clcache-{}", server_id);
     let server_ready_event = format!(r"Local\ready-{}", server_id);
     let singleton_name = format!(r"Local\singleton-{}", server_id);
@@ -64,10 +75,15 @@ async fn main() -> io::Result<()> {
         return Ok(());
     }
 
+    let watch_behavior = match args.monitoring_mode {
+        MonitoringMode::Timestamp => hash_cache::WatchBehavior::DoNotMonitor,
+        MonitoringMode::Watch => hash_cache::WatchBehavior::MonitorForChanges,
+    };
+    
     let timeout = Duration::from_secs(args.timeout);
 
     // Create the hash cache.
-    let cache = Arc::new(hash_cache::HashCache::new());
+    let cache = Arc::new(hash_cache::HashCache::new(watch_behavior));
 
     // Create a channel to notify the main task when a client has connected.
     let (reset_idle_timer_tx, mut reset_idle_timer_rx) = mpsc::channel(1);

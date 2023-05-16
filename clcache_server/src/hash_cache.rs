@@ -9,6 +9,7 @@ use std::{
     io::BufRead,
     path::{Path, PathBuf},
     sync::Arc,
+    time::SystemTime,
 };
 
 use tokio::{
@@ -18,12 +19,24 @@ use tokio::{
 
 use dashmap::DashMap;
 
-type FileHashDict = HashMap<String, String>;
+struct HashEntry {
+    hash: String,
+    last_modified: SystemTime,
+}
+
+/// Maps file names to hashes.
+type FileHashDict = HashMap<String, HashEntry>;
+
+/// Maps directories to a map of file names to hashes.
 type DirectoryToFileHashDict = DashMap<PathBuf, FileHashDict>;
 
+/// The behavior of the file system watcher.
 pub enum WatchBehavior {
-    MonitorForChanges, // watch file and remove from cache if it changes
-    DoNotMonitor,      // do not watch file
+    /// Watch file and remove from cache if it changes
+    MonitorForChanges,
+
+    /// Do not watch file
+    DoNotMonitor,
 }
 
 struct DirWatcher {
@@ -37,42 +50,49 @@ pub struct HashCache {
     cache: Arc<DirectoryToFileHashDict>,
 
     // file system watcher
-    dir_watcher: Arc<Mutex<DirWatcher>>,
+    dir_watcher: Option<Arc<Mutex<DirWatcher>>>,
 }
 
 impl HashCache {
-    pub fn new() -> Self {
-        let (tx, rx) = mpsc::channel(1);
-
-        let dir_watcher = Arc::new(Mutex::new(DirWatcher {
-            watcher: RecommendedWatcher::new(
-                move |res| {
-                    let rt = Runtime::new().unwrap();
-                    let tx = tx.clone();
-
-                    rt.spawn(async move {
-                        match tx.send(res).await {
-                            Ok(_) => {}
-                            Err(_) => {
-                                debug!("Failed to send directory event");
-                            }
-                        }
-                    });
-                },
-                Config::default(),
-            )
-            .unwrap(),
-            watched_dirs: HashSet::new(),
-        }));
-
+    pub fn new(watch_behavior: WatchBehavior) -> Self {
         let cache = Arc::new(DirectoryToFileHashDict::new());
 
-        // spawn event handler
-        tokio::spawn(Self::handle_directory_events(
-            rx,
-            Arc::clone(&dir_watcher),
-            Arc::clone(&cache),
-        ));
+        let dir_watcher = match watch_behavior {
+            WatchBehavior::MonitorForChanges => {
+                let (tx, rx) = mpsc::channel(1);
+
+                let dir_watcher = Arc::new(Mutex::new(DirWatcher {
+                    watcher: RecommendedWatcher::new(
+                        move |res| {
+                            let rt = Runtime::new().unwrap();
+                            let tx = tx.clone();
+
+                            rt.spawn(async move {
+                                match tx.send(res).await {
+                                    Ok(_) => {}
+                                    Err(_) => {
+                                        debug!("Failed to send directory event");
+                                    }
+                                }
+                            });
+                        },
+                        Config::default(),
+                    )
+                    .unwrap(),
+                    watched_dirs: HashSet::new(),
+                }));
+
+                // spawn event handler
+                tokio::spawn(Self::handle_directory_events(
+                    rx,
+                    Arc::clone(&dir_watcher),
+                    Arc::clone(&cache),
+                ));
+
+                Some(dir_watcher)
+            }
+            WatchBehavior::DoNotMonitor => None,
+        };
 
         HashCache { cache, dir_watcher }
     }
@@ -113,32 +133,48 @@ impl HashCache {
 
         match behavior {
             WatchBehavior::MonitorForChanges => {
-                // start watching the directory
-                self.watch_dir(&parent_dir).await;
+                if let Some(dir_watcher) = &self.dir_watcher {
+                    let mut dir_watcher = dir_watcher.lock().await;
+
+                    // start watching the directory
+                    HashCache::watch_dir(&parent_dir, &mut dir_watcher);
+                }
             }
-            WatchBehavior::DoNotMonitor => {
-                trace!("Not watching directory '{}'", parent_dir.display());
-            }
+            WatchBehavior::DoNotMonitor => {}
         }
 
-        // look up file in it
-        if let Some(file_hash) = dir_hashes.get(&file_name) {
-            trace!("Found file '{}' in cache", resolved_path.display());
-            return Ok(file_hash.clone());
+        if let Some(hash_entry) = dir_hashes.get(&file_name) {
+            // if using timestamps, check if the file has been modified
+            if !self.dir_watcher.is_none()
+                || self.get_file_last_modified(&resolved_path)? == hash_entry.last_modified
+            {
+                trace!("Found file '{}' in cache", resolved_path.display());
+                return Ok(hash_entry.hash.clone());
+            }
         }
 
         // not found => calculate hash
         trace!("Calculating hash for file '{}'", resolved_path.display());
         let file_hash = Self::calculate_hash(&resolved_path)?;
-        dir_hashes.insert(file_name, file_hash.clone());
+        dir_hashes.insert(
+            file_name,
+            HashEntry {
+                hash: file_hash.clone(),
+                last_modified: self.get_file_last_modified(&resolved_path)?,
+            },
+        );
 
         Ok(file_hash)
     }
 
     pub async fn clear(&self) {
-        for dir in self.cache.iter().map(|entry| entry.key().clone()) {
-            if let Err(e) = self.dir_watcher.lock().await.watcher.unwatch(&dir) {
-                error!("Failed to unwatch directory: {:?}", e);
+        if let Some(dir_watcher) = &self.dir_watcher {
+            let mut dir_watcher = dir_watcher.lock().await;
+
+            for dir in self.cache.iter().map(|entry| entry.key().clone()) {
+                if let Err(e) = dir_watcher.watcher.unwatch(&dir) {
+                    error!("Failed to unwatch directory: {:?}", e);
+                }
             }
         }
 
@@ -223,19 +259,14 @@ impl HashCache {
         trace!("Directory event handler terminated");
     }
 
-    async fn watch_dir(&self, directory: &Path) {
+    /// Watch a directory for changes
+    fn watch_dir(directory: &Path, dir_watcher: &mut DirWatcher) {
         let directory = directory.to_path_buf();
-
-        // spawn a task to watch the directory (async in order to not block the main thread)
-        let mut dir_watcher = self.dir_watcher.lock().await;
 
         // get watcher and set of watched directories
         let watched_dirs = &mut dir_watcher.watched_dirs;
 
-        if !watched_dirs.contains(&directory) {
-            // add directory to set of watched directories
-            watched_dirs.insert(directory.clone());
-
+        if watched_dirs.insert(directory.clone()) {
             // watch directory
             match dir_watcher
                 .watcher
@@ -283,5 +314,32 @@ impl HashCache {
         let digest = context.compute();
 
         Ok(format!("{:x}", digest))
+    }
+
+    /// Get the last modified timestamp of a file
+    fn get_file_last_modified(&self, resolved_path: &PathBuf) -> Result<SystemTime> {
+        let metadata = std::fs::metadata(resolved_path)?;
+        Ok(metadata.modified()?)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn calculate_hash_1() {
+        let hash = super::HashCache::calculate_hash(&std::path::PathBuf::from(
+            "tests/res/1/qjsonrpcservice.h",
+        ))
+        .unwrap();
+        assert_eq!(hash, "1e69f8ad0d5e16cad26ab3bb454cf841");
+    }
+
+    #[test]
+    fn calculate_hash_2() {
+        let result = super::HashCache::calculate_hash(&std::path::PathBuf::from(
+            "tests/res/2/qjsonrpcservice.h",
+        ));
+
+        assert!(result.is_err());
     }
 }

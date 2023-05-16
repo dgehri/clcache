@@ -10,7 +10,6 @@ authors = ["Daniel Gehriger <dgehriger@globusmedical.com>"]
 dashmap = "5.4" # Concurrent hashmap
 anyhow = "1.0" # Error handling
 tokio = { version = "1.0", features = ["full"] } # Asynchronous runtime
-tokio-named-pipes = "0.1" # Implementation of named pipes for Windows
 winapi = "0.3" # Windows API bindings
 once_cell = "1.8.0" # Thread-safe lazy initialization
 single-instance = "0.3"
@@ -18,9 +17,10 @@ clap = { version = "4.2", features = ["derive"] }
 uuid = { version = "1.3", features = ["v4"] }
 md5 = "0.7"
 notify = "5.1"
-notify-debouncer-mini = { version = "*", default-features = false }
 log = "0.4"
 env_logger = "0.10.0"
 tempfile = "3.5.0"
+strum = "0.24"
+strum_macros = "0.24.3"
 
 [build]

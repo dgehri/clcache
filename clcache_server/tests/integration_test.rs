@@ -1,6 +1,7 @@
 use std::{collections::HashMap, path::PathBuf, str::FromStr, time::Duration};
 
 use log::{error, info, trace};
+use strum_macros::{EnumString, Display};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::windows::named_pipe::{ClientOptions, NamedPipeClient},
@@ -8,14 +9,41 @@ use tokio::{
     time,
 };
 use winapi::shared::winerror::ERROR_PIPE_BUSY;
+use std::sync::Once;
+
+static INIT: Once = Once::new();
+
+#[derive(EnumString, Display)]
+enum MonitoringMode {
+    /// Use timestamp of the file to detect changes
+    #[strum(serialize = "timestamp")]
+    Timestamp,
+
+    /// Watch filesystem for changes
+    #[strum(serialize = "watch")]
+    Watch,
+}
+
 
 #[tokio::test]
-async fn test_server() {
-    env_logger::builder()
-        .filter_module("integration_test", log::LevelFilter::Trace)
-        .is_test(true)
-        .try_init()
-        .unwrap();
+async fn test_server_with_timestamps() {
+    test_server(MonitoringMode::Timestamp).await;
+}
+
+#[tokio::test]
+async fn test_server_with_monitoring() {
+    test_server(MonitoringMode::Watch).await;
+}
+
+async fn test_server(monitoring_mode: MonitoringMode) {
+    INIT.call_once(|| {
+        env_logger::builder()
+            .filter_module("integration_test", log::LevelFilter::Trace)
+            .format_timestamp_millis()
+            .is_test(true)
+            .try_init()
+            .unwrap();
+    });
 
     let server_id = uuid::Uuid::new_v4().to_string();
     let pipe_name = format!(r"\\.\pipe\\LOCAL\\clcache-{}", server_id);
@@ -40,6 +68,7 @@ async fn test_server() {
     let _server = Command::new(server_path)
         .arg("--idle-timeout=10")
         .arg(format!("--id={}", server_id))
+        .arg(format!("--monitoring-mode={}", monitoring_mode))
         .arg("--verbose")
         .arg("--verbose")
         .spawn()
@@ -57,9 +86,15 @@ async fn test_server() {
     // map of expected file names and their hashes
     let test_files = vec![
         ("1/qjsonrpcservice.h", "1e69f8ad0d5e16cad26ab3bb454cf841"),
-        ("1/qjsonrpcserviceprovider.h", "31bc9f3351c83bf468c21db7fbacb8b3",),
+        (
+            "1/qjsonrpcserviceprovider.h",
+            "31bc9f3351c83bf468c21db7fbacb8b3",
+        ),
         ("1/qjsonrpcsocket.h", "0f483597162c942713158b740fed5892"),
-        ("2/qjsonrpcabstractserver.h", "0cbdcb5aefc22f463528b8e931604147",),
+        (
+            "2/qjsonrpcabstractserver.h",
+            "0cbdcb5aefc22f463528b8e931604147",
+        ),
         ("2/qjsonrpcglobal.h", "58d68e85d7788e7e07b480431496b668"),
         ("2/qjsonrpcmessage.h", "6b742f5b5d13201547646fdd991f1145"),
     ];
@@ -122,6 +157,7 @@ async fn test_server() {
     let hash1 = get_file_hashes(&pipe_name, &vec![temp_file_path.clone()]).await;
 
     // modify the file
+    info!("Modifying file");
     std::fs::write(&temp_file_path, "bar").unwrap();
 
     // sleep for 1 second to ensure that the file modification time is different
@@ -172,11 +208,9 @@ async fn get_file_hashes(pipe_name: &str, files: &Vec<PathBuf>) -> HashMap<PathB
     }
     query.push(b'\0');
 
-    info!("Sending query...");
     client.write_all(&query).await.unwrap();
 
     // read entire response into buffer
-    info!("Reading response...");
     let mut response = Vec::new();
     client.read_to_end(&mut response).await.unwrap();
 
