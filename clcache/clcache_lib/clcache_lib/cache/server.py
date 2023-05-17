@@ -2,7 +2,6 @@ import errno
 import hashlib
 import logging
 import pickle
-import signal
 import subprocess as sp
 import sys
 from collections.abc import Callable
@@ -11,7 +10,6 @@ from pathlib import Path
 
 import pyuv
 
-from ..utils.app_singleton import AppSingleton
 from ..utils.logging import LogLevel, log
 from ..utils.named_mutex import NamedMutex
 from ..utils.ready_event import ReadyEvent
@@ -30,6 +28,9 @@ BUFFER_SIZE = 65536
 # Define some Win32 API constants here to avoid dependency on win32pipe
 NMPWAIT_WAIT_FOREVER = wintypes.DWORD(0xFFFFFFFF)
 ERROR_PIPE_BUSY = 231
+ERROR_ALREADY_EXISTS = 183
+SYNCHRONIZE = 0x00100000
+MUTEX_ALL_ACCESS = 0x1F0001
 
 
 class HashCache:
@@ -113,14 +114,14 @@ class PipeServer:
 
     @staticmethod
     def is_running():
-        event = None
+        handle = None
         try:
-            event = windll.kernel32.OpenEventW(
-                wintypes.DWORD(0x1F0003), wintypes.BOOL(False), SINGLETON_NAME)
-            return event != 0
+            handle = windll.kernel32.OpenMutexW(
+                SYNCHRONIZE, False, SINGLETON_NAME)
+            return handle != 0
         finally:
-            if event:
-                windll.kernel32.CloseHandle(event)
+            if handle:
+                windll.kernel32.CloseHandle(handle)
 
     @staticmethod
     def get_file_hashes(path_list: list[Path]) -> list[str]:
@@ -169,9 +170,11 @@ def spawn_server(server_idle_timeout_s: int, wait_time_s: int = 10):
                 args.append(Path(sys.argv[0]).absolute().parent /
                             "clcache_server/target/release/clcache_server.exe")
             else:
-                args.append(Path(sys.executable).parent / "clcache_server.exe")
+                args.append(Path(sys.executable).parent.parent /
+                            "clcache_server.exe")
 
-            args.extend((f"--idle-timeout={server_idle_timeout_s}", f"--id={UUID}"))
+            args.extend(
+                (f"--idle-timeout={server_idle_timeout_s}", f"--id={UUID}"))
             try:
                 p = sp.Popen(
                     args, creationflags=sp.CREATE_NEW_PROCESS_GROUP | sp.CREATE_NO_WINDOW)
@@ -180,7 +183,9 @@ def spawn_server(server_idle_timeout_s: int, wait_time_s: int = 10):
                     log(
                         f"Started hash server with timeout {server_idle_timeout_s} seconds")
                 else:
-                    log("Failed to start hash server", level=LogLevel.WARN)
+                    log(
+                        f"Failed to start hash server with parameters {args}", level=LogLevel.WARN)
+
             except FileNotFoundError as e:
                 raise RuntimeError(
                     "Failed to start hash server: clcache_server.exe not found"
