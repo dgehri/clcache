@@ -3,14 +3,14 @@ from conan.tools.files import rename
 
 class ClcacheConan(ConanFile):
     name = "clcache"
-    version = "4.4.8"
+    version = "4.4.9"
     author = "Daniel Gehriger <dgehriger@globusmedical.com>"
     settings = "os", "arch"
     description = "A compiler cache for Microsoft Visual Studio"
     url = "https://github.com/dgehri/clcache"
     license = "https://github.com/dgehri/clcache/blob/master/LICENSE"
     user = "dgehri"
-    channel = "stable"
+    channel = "dev"
 
     def package(self):
         # Copy clcache.exe to bin and rename to moccache.exe
@@ -27,6 +27,10 @@ class ClcacheConan(ConanFile):
         # Copy clcache_launcher.exe and rename to moccache.exe
         self.copy("clcache_launcher.exe", dst="bin", src="../clcache_launcher/target/release")
         rename(self, f"{self.package_folder}/bin/clcache_launcher.exe", f"{self.package_folder}/bin/moccache.exe")
+        
+        # Copy clcache_server.exe
+        self.copy("clcache_server.exe", dst="bin", src="../clcache_server/target/release")
+        
         
         self.copy("*", dst=".", src="doc")
 

@@ -17,12 +17,13 @@ from ..utils.named_mutex import NamedMutex
 from ..utils.ready_event import ReadyEvent
 
 # Not the same as VERSION !
-SERVER_VERSION = "1"
+SERVER_VERSION = "2"
 
-PIPE_NAME = fr'\\.\pipe\LOCAL\clcache-626763c0-bebe-11ed-a901-0800200c9a66-{SERVER_VERSION}'
-SINGLETON_NAME = fr"Local\singleton-626763c0-bebe-11ed-a901-0800200c9a66-{SERVER_VERSION}"
-LAUNCH_MUTEX = fr"Local\mutex-626763c0-bebe-11ed-a901-0800200c9a66-{SERVER_VERSION}"
-PIPE_READY_EVENT = fr"Local\ready-626763c0-bebe-11ed-a901-0800200c9a66-{SERVER_VERSION}"
+UUID = fr'626763c0-bebe-11ed-a901-0800200c9a66-{SERVER_VERSION}'
+PIPE_NAME = fr'\\.\pipe\LOCAL\clcache-{UUID}'
+SINGLETON_NAME = fr"Local\singleton-{UUID}"
+LAUNCH_MUTEX = fr"Local\mutex-{UUID}"
+PIPE_READY_EVENT = fr"Local\ready-{UUID}"
 
 
 BUFFER_SIZE = 65536
@@ -109,46 +110,6 @@ class Connection:
 
 
 class PipeServer:
-    def __init__(self, timeout_s: int = 180):
-        self._event_loop = None
-        self._timer = None
-        self._timeout = timeout_s
-        self._pipe_server = None
-        self._connections = []
-        self._cache = None
-
-    def run(self) -> int:
-        # ensure only one instance of clcache server is running
-        with AppSingleton(SINGLETON_NAME) as singleton:
-            if not singleton.created():
-                return 0
-
-            self._event_loop = pyuv.Loop.default_loop()  # type: ignore
-            self._cache = HashCache(self._event_loop)
-            self._timer = pyuv.Timer(self._event_loop)  # type: ignore
-            self._pipe_server = pyuv.Pipe(self._event_loop)  # type: ignore
-            self._pipe_server.bind(PIPE_NAME)
-            self._pipe_server.listen(self._on_connection)
-            signal_handle = None
-            try:
-                signal_handle = pyuv.Signal(  # type: ignore
-                    self._event_loop)
-                signal_handle.start(PipeServer._on_sigterm, signal.SIGTERM)
-
-                # start listening for connections, but stop event loop if idle
-                # create a timer to stop the event loop if idle
-                self._timer.start(self._on_timeout,
-                                  self._timeout, self._timeout)
-
-                # signal that the pipe is ready
-                self._signal_server_ready()
-
-                # start event loop
-                self._event_loop.run()
-                return 0
-            finally:
-                if signal_handle:
-                    signal_handle.close()
 
     @staticmethod
     def is_running():
@@ -171,7 +132,9 @@ class PipeServer:
                     f.write(b"\x00")
                     response = f.read()
                     if response.startswith(b"!"):
-                        raise runtime_error(response[1:-1].decode("utf-8"))
+                        # extract error string
+                        error = response[1:-1].decode("utf-8")
+                        raise FileNotFoundError(error)
                     return response[:-1].decode("utf-8").splitlines()
             except OSError as e:
                 if (
@@ -183,33 +146,6 @@ class PipeServer:
                         PIPE_NAME, NMPWAIT_WAIT_FOREVER)
                 else:
                     raise
-
-    @staticmethod
-    def _signal_server_ready():
-        # open existing event and set it
-        ReadyEvent.signal(PIPE_READY_EVENT)
-
-    @staticmethod
-    def _on_timeout(handle: pyuv.Timer):  # type: ignore
-        handle.loop.stop()
-
-    def _on_connection(self, pipe, error):
-        assert self._timer is not None
-        assert self._cache is not None
-
-        # reset timer
-        self._timer.again()
-
-        # accept connection
-        client = pyuv.Pipe(self._pipe_server.loop)  # type: ignore
-        pipe.accept(client)
-        self._connections.append(Connection(
-            client, self._cache, self._connections.remove))
-
-    @staticmethod
-    def _on_sigterm(handle, signum):
-        for h in handle.loop.handles:
-            h.close()
 
 
 def spawn_server(server_idle_timeout_s: int, wait_time_s: int = 10):
@@ -228,21 +164,25 @@ def spawn_server(server_idle_timeout_s: int, wait_time_s: int = 10):
 
         with ReadyEvent(PIPE_READY_EVENT) as ready_event:
             args = []
+            # Launch clcache_server.exe located in the same directory as this executable
             if "__compiled__" not in globals():
-                args.append(sys.executable)
-            args.extend(
-                (
-                    Path(sys.argv[0]).absolute(),
-                    f"--run-server={server_idle_timeout_s}",
-                )
-            )
-
-            p = sp.Popen(
-                args, creationflags=sp.CREATE_NEW_PROCESS_GROUP | sp.CREATE_NO_WINDOW)
-            success = p.pid != 0 and ready_event.wait(wait_time_s*1000)
-            if success:
-                log(
-                    f"Started hash server with timeout {server_idle_timeout_s} seconds")
+                args.append(Path(sys.argv[0]).absolute().parent /
+                            "clcache_server/target/release/clcache_server.exe")
             else:
-                log("Failed to start hash server", level = LogLevel.WARN)
+                args.append(Path(sys.executable).parent / "clcache_server.exe")
+
+            args.extend((f"--idle-timeout={server_idle_timeout_s}", f"--id={UUID}"))
+            try:
+                p = sp.Popen(
+                    args, creationflags=sp.CREATE_NEW_PROCESS_GROUP | sp.CREATE_NO_WINDOW)
+                success = p.pid != 0 and ready_event.wait(wait_time_s*1000)
+                if success:
+                    log(
+                        f"Started hash server with timeout {server_idle_timeout_s} seconds")
+                else:
+                    log("Failed to start hash server", level=LogLevel.WARN)
+            except FileNotFoundError as e:
+                raise RuntimeError(
+                    "Failed to start hash server: clcache_server.exe not found"
+                ) from e
             return success

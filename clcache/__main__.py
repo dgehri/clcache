@@ -13,25 +13,14 @@ from clcache_lib.actions import (get_compiler_path, handle_clcache_options,
                                  parse_args)
 from clcache_lib.utils.logging import LogLevel, flush_logger, init_logger, log
 from clcache_lib.utils.util import get_build_dir
+from clcache_lib.cache.cache import Cache
 
 
 def main() -> int:
     if "CLCACHE_ACCESS_VIOLATION" in os.environ:
         log("Recovering from access violation", LogLevel.ERROR)
-    
+
     clcache_options = parse_args()
-    if clcache_options is not None and clcache_options.run_server is not None:
-        # Run clcache server
-        from clcache_lib.cache.server import PipeServer
-
-        if PipeServer.is_running():
-            return 0
-
-        # we are the first instance
-        server = PipeServer(timeout_s=clcache_options.run_server)
-        return server.run()
-
-    from clcache_lib.cache.cache import Cache
 
     with Cache() as cache:
 
