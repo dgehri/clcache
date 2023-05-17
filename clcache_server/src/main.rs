@@ -1,6 +1,6 @@
 use anyhow::Result;
 use clap::Parser;
-use log::{debug, error, info, trace};
+use log::{debug, error, info};
 use single_instance::SingleInstance;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -16,15 +16,6 @@ mod hash_cache;
 
 use event::signal_event;
 
-#[derive(clap::ValueEnum, Clone, Debug)]
-enum MonitoringMode {
-    /// Use timestamp of the file to detect changes
-    Timestamp,
-
-    /// Watch filesystem for changes
-    Watch,
-}
-
 /// Lightweight server to calculate MD5 hashes of files.
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -32,10 +23,6 @@ struct Args {
     /// Server idle timeout in seconds.
     #[arg(long = "idle-timeout", default_value = "180")]
     timeout: u64,
-
-    /// File monitoring mode
-    #[arg(long = "monitoring-mode", default_value = "watch", value_enum)]
-    monitoring_mode: MonitoringMode,
 
     /// Sets non-default ID to be used by the server (for testing purposes)
     #[arg(
@@ -50,7 +37,7 @@ struct Args {
     verbose: u8,
 }
 
-#[tokio::main(flavor = "multi_thread", worker_threads = 32)]
+#[tokio::main(flavor = "multi_thread")]
 async fn main() -> io::Result<()> {
     // Parse the command line arguments (accept --run-server=<timeout> parameter)
     // Get version from Cargo.toml
@@ -79,15 +66,10 @@ async fn main() -> io::Result<()> {
         return Ok(());
     }
 
-    let watch_behavior = match args.monitoring_mode {
-        MonitoringMode::Timestamp => hash_cache::WatchBehavior::DoNotMonitor,
-        MonitoringMode::Watch => hash_cache::WatchBehavior::MonitorForChanges,
-    };
-
     let timeout = Duration::from_secs(args.timeout);
 
     // Create the hash cache.
-    let cache = Arc::new(hash_cache::HashCache::new(watch_behavior));
+    let cache = Arc::new(hash_cache::HashCache::new());
 
     // Create a channel to notify the main task when a client has connected.
     let (reset_idle_timer_tx, mut reset_idle_timer_rx) = mpsc::channel(1);
@@ -220,39 +202,35 @@ async fn handle_client(
         // - otherwise, set WatchBehavior to MonitorForChanges
         let paths: Vec<_> = String::from_utf8(read_buf[..read_buf.len() - 1].to_vec())?
             .lines()
-            .map(|path: &str| {
-                if path.ends_with('?') {
-                    (
-                        PathBuf::from(&path[..path.len() - 1]),
-                        hash_cache::WatchBehavior::DoNotMonitor,
-                    )
-                } else {
-                    (
-                        PathBuf::from(path),
-                        hash_cache::WatchBehavior::MonitorForChanges,
-                    )
-                }
-            })
+            .map(|path: &str| PathBuf::from(path))
             .collect();
 
-        // Prepare the response buffer.
-        let mut response = Vec::new();
+        // request all hashes
+        let hashes = cache.get_file_hashes(&paths).await;
 
-        // Iterate over the paths and calculate the hashes.
-        for (path, watch_behavior) in paths {
-            trace!("Calculating hash for {}", path.display());
-            match cache.get_file_hash(&path, watch_behavior).await {
-                Ok(file_hash) => response.extend(file_hash.as_bytes()),
-                Err(e) => {
-                    response.push(b'!'); // Error indicator
-                    response.extend(e.to_string().as_bytes());
+        match hashes {
+            Ok(hashes) => {
+                // Write the response.
+                let mut response = Vec::<u8>::new();
+                for hash in hashes {
+                    response.extend(hash.as_bytes());
+                    response.push(b'\n');
                 }
-            }
-            response.push(b'\n');
-        }
 
-        response.push(0);
-        client.write_all(&response).await?;
+                response.push(b'\0');
+
+                client.write_all(&response).await?;
+            }
+            Err(e) => {
+                // Write the error response.
+                let mut response = Vec::<u8>::new();
+                response.push(b'!'); // Error indicator
+                response.extend(e.to_string().as_bytes());
+                response.push(b'\0');
+
+                client.write_all(&response).await?;
+            }
+        };
     }
 
     Ok(())
@@ -260,112 +238,55 @@ async fn handle_client(
 
 #[cfg(test)]
 mod tests {
-    use rand::{Rng, RngCore};
-    use std::{fs, io::Write, path::PathBuf};
+    use std::path::{Path, PathBuf};
 
-    use crate::hash_cache;
-
-    struct TestFiles {
-        temp_dir: tempfile::TempDir,
-        test_files: Vec<PathBuf>,
-        files_to_modify: Vec<PathBuf>,
-    }
-
-    impl TestFiles {
-        fn new() -> Self {
-            // create a temp directory
-            let temp_dir = tempfile::tempdir().unwrap();
-
-            // inside, create 10000 files with random content, evenly spread over 100 directories
-            // and mark 50 files for later modification
-            let mut rng = rand::thread_rng();
-            let mut files_to_modify = Vec::new();
-            let mut test_files = Vec::new();
-            for i in 0..10 {
-                let dir = temp_dir.path().join(format!("dir{}", i));
-                fs::create_dir(&dir).unwrap();
-                for j in 0..100 {
-                    let file = dir.join(format!("file{}", j));
-                    test_files.push(file.clone());
-                    let mut f = fs::File::create(&file).unwrap();
-                    let mut buf = [0; 1024];
-                    rng.fill_bytes(&mut buf);
-                    f.write_all(&buf).unwrap();
-                    if rng.gen_bool(0.005) {
-                        files_to_modify.push(file);
+    fn get_test_files(
+        root_dir: &Path,
+        count: usize,
+        result: &mut Vec<PathBuf>,
+    ) -> std::io::Result<()> {
+        let mut entries = std::fs::read_dir(root_dir)?;
+        while let Some(entry) = entries.next() {
+            if let Ok(entry) = entry {
+                let path = entry.path();
+                if path.is_dir() {
+                    get_test_files(&path, count, result).ok();
+                } else {
+                    // skip if less than 1MB and more than 20 MB
+                    let metadata = std::fs::metadata(&path)?;
+                    if metadata.len() < 100 * 1024 || metadata.len() > 1 * 1024 * 1024 {
+                        continue;
                     }
+
+                    // skip if no read access
+                    if std::fs::File::open(&path).is_err() {
+                        continue;
+                    }
+
+                    result.push(path);
+                }
+                if result.len() >= count as usize {
+                    break;
                 }
             }
-
-            TestFiles {
-                temp_dir,
-                test_files,
-                files_to_modify,
-            }
         }
 
-        fn info(&self) {
-            println!("Will be modifying {} files", self.files_to_modify.len());
-
-            // count number of unique directories for modified files
-            let mut unique_dirs = std::collections::HashSet::new();
-            for file in &self.files_to_modify {
-                unique_dirs.insert(file.parent().unwrap().to_path_buf());
-            }
-            println!("Will be modifying {} directories", unique_dirs.len());
-        }
+        Ok(())
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn performance_test_file_watcher() {
-        let test_files = TestFiles::new();
-        test_files.info();
+        let mut test_files = Vec::new();
+        get_test_files(Path::new("C:\\"), 1000, &mut test_files).unwrap();
 
-        test_impl(&test_files, hash_cache::WatchBehavior::DoNotMonitor).await;
-        test_impl(&test_files, hash_cache::WatchBehavior::MonitorForChanges).await;
-        test_impl(&test_files, hash_cache::WatchBehavior::DoNotMonitor).await;
-        test_impl(&test_files, hash_cache::WatchBehavior::MonitorForChanges).await;
-    }
-
-    async fn test_impl(test_files: &TestFiles, watch_behavior: hash_cache::WatchBehavior) {
-        println!("Measuring performance for {:?}", watch_behavior);
-
-        let cache = std::sync::Arc::new(crate::hash_cache::HashCache::new(watch_behavior));
-
-        // record current time
         let start = std::time::Instant::now();
+        let cache = std::sync::Arc::new(crate::hash_cache::HashCache::new());
+        let hashes = cache.get_file_hashes(&test_files).await.unwrap();
 
-        // request hashes for all files
-        for file in &test_files.test_files {
-            cache
-                .get_file_hash(file, crate::hash_cache::WatchBehavior::MonitorForChanges)
-                .await
-                .unwrap();
-        }
-
-        // print elapsed time
-        println!("Elapsed time: {:?}", start.elapsed());
-
-        // modify files
-        for file in &test_files.files_to_modify {
-            let mut f = fs::File::create(file).unwrap();
-            let mut buf = [0; 1024];
-            rand::thread_rng().fill_bytes(&mut buf);
-            f.write_all(&buf).unwrap();
-        }
-
-        // record current time
-        let start = std::time::Instant::now();
-
-        // request hashes for all files
-        for file in &test_files.test_files {
-            cache
-                .get_file_hash(file, crate::hash_cache::WatchBehavior::MonitorForChanges)
-                .await
-                .unwrap();
-        }
-
-        // print elapsed time
-        println!("Elapsed time: {:?}", start.elapsed());
+        println!(
+            "Hashed {} files in {} ms (parallel)",
+            hashes.len(),
+            start.elapsed().as_millis()
+        );
     }
 }

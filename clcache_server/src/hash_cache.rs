@@ -1,20 +1,13 @@
 pub(crate) use anyhow::{Context, Result};
 
-use log::{debug, error, trace};
-use notify::{Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
+use log::{error, trace};
 
 use std::{
-    collections::{HashMap, HashSet},
     fs::File,
     io::BufRead,
     path::{Path, PathBuf},
     sync::Arc,
     time::SystemTime,
-};
-
-use tokio::{
-    runtime::Runtime,
-    sync::{mpsc, Mutex},
 };
 
 use dashmap::DashMap;
@@ -24,78 +17,21 @@ struct HashEntry {
     last_modified: SystemTime,
 }
 
-/// Maps file names to hashes.
-type FileHashDict = HashMap<String, HashEntry>;
-
-/// Maps directories to a map of file names to hashes.
-type DirectoryToFileHashDict = DashMap<PathBuf, FileHashDict>;
-
-/// The behavior of the file system watcher.
-#[derive(Debug, Clone, Copy)]
-pub enum WatchBehavior {
-    /// Watch file and remove from cache if it changes
-    MonitorForChanges,
-
-    /// Do not watch file
-    DoNotMonitor,
-}
-
-struct DirWatcher {
-    watcher: RecommendedWatcher,
-    watched_dirs: HashSet<PathBuf>,
-}
+/// Maps file paths to hashes and last modified times.
+type FileHashDict = DashMap<PathBuf, HashEntry>;
 
 /// A cache of file hashes.
+#[derive(Clone)]
 pub struct HashCache {
     /// Maps watched directories to a map of file names to hashes.
-    cache: Arc<DirectoryToFileHashDict>,
-
-    // file system watcher
-    dir_watcher: Option<Arc<Mutex<DirWatcher>>>,
+    cache: Arc<FileHashDict>,
 }
 
 impl HashCache {
-    pub fn new(watch_behavior: WatchBehavior) -> Self {
-        let cache = Arc::new(DirectoryToFileHashDict::new());
-
-        let dir_watcher = match watch_behavior {
-            WatchBehavior::MonitorForChanges => {
-                let (tx, rx) = mpsc::channel(1);
-
-                let dir_watcher = Arc::new(Mutex::new(DirWatcher {
-                    watcher: RecommendedWatcher::new(
-                        move |res| {
-                            let rt = Runtime::new().unwrap();
-                            let tx = tx.clone();
-
-                            rt.spawn(async move {
-                                match tx.send(res).await {
-                                    Ok(_) => {}
-                                    Err(_) => {
-                                        debug!("Failed to send directory event");
-                                    }
-                                }
-                            });
-                        },
-                        Config::default(),
-                    )
-                    .unwrap(),
-                    watched_dirs: HashSet::new(),
-                }));
-
-                // spawn event handler
-                tokio::spawn(Self::handle_directory_events(
-                    rx,
-                    Arc::clone(&dir_watcher),
-                    Arc::clone(&cache),
-                ));
-
-                Some(dir_watcher)
-            }
-            WatchBehavior::DoNotMonitor => None,
-        };
-
-        HashCache { cache, dir_watcher }
+    pub fn new() -> Self {
+        HashCache {
+            cache: Arc::new(FileHashDict::new()),
+        }
     }
 
     /// Returns the hash of the file at the given path. If the file is not in the cache, it is
@@ -103,188 +39,108 @@ impl HashCache {
     ///
     /// Parameters:
     ///     path: The path to the file.
-    ///     behavior: Whether to monitor the file for changes.
     ///
     /// Returns:
     ///    The hash of the file.
-    pub async fn get_file_hash(&self, path: &Path, behavior: WatchBehavior) -> Result<String> {
+    pub async fn get_file_hash(&self, path: &Path) -> Result<String> {
         // fully resolve the path (symlinks, mapped drives, etc.)
         let resolved_path = path
             .canonicalize()
             .with_context(|| format!("Failed to resolve path '{}'", path.display()))?;
 
-        let parent_dir = resolved_path
-            .parent()
-            .with_context(|| format!("Path '{}' has no parent", resolved_path.display()))?;
+        // look up path in cache, calculate hash if not found and add to cache
+        let hash = match self.cache.get_mut(&resolved_path) {
+            Some(mut entry) => {
+                // check if file has been modified
+                let metadata = match std::fs::metadata(&resolved_path) {
+                    Ok(metadata) => metadata,
+                    Err(e) => {
+                        error!(
+                            "Failed to get metadata for file '{}': {}",
+                            path.display(),
+                            e
+                        );
+                        return Err(e.into());
+                    }
+                };
 
-        // get file name
-        let file_name = resolved_path
-            .file_name()
-            .with_context(|| format!("Path '{}' has no file name", resolved_path.display()))?
-            .to_os_string()
-            .into_string()
-            .map_err(|_| anyhow::anyhow!("Failed to convert file name to string"))?;
+                let modified = match metadata.modified() {
+                    Ok(modified) => modified,
+                    Err(e) => {
+                        error!(
+                            "Failed to get modification time for file '{}': {}",
+                            path.display(),
+                            e
+                        );
+                        return Err(e.into());
+                    }
+                };
 
-        // get hashes for the parent directory
-        trace!("Getting hashes for directory '{}'", parent_dir.display());
-        let mut dir_hashes = self
-            .cache
-            .entry(parent_dir.to_path_buf())
-            .or_insert_with(|| FileHashDict::new());
+                if modified != entry.last_modified {
+                    // file has been modified, recalculate hash
+                    trace!(
+                        "File '{}' has been modified, recalculating hash",
+                        path.display()
+                    );
 
-        match behavior {
-            WatchBehavior::MonitorForChanges => {
-                if let Some(dir_watcher) = &self.dir_watcher {
-                    let mut dir_watcher = dir_watcher.lock().await;
+                    let hash = HashCache::calculate_hash(&resolved_path)?;
 
-                    // start watching the directory
-                    HashCache::watch_dir(&parent_dir, &mut dir_watcher);
+                    // update cache
+                    entry.hash = hash.clone();
+                    entry.last_modified = modified;
+
+                    hash
+                } else {
+                    // file has not been modified, return cached hash
+                    entry.value().hash.clone()
                 }
             }
-            WatchBehavior::DoNotMonitor => {}
-        }
+            None => {
+                // file not in cache, calculate hash
+                trace!("File '{}' not in cache, calculating hash", path.display());
 
-        if let Some(hash_entry) = dir_hashes.get(&file_name) {
-            // if using timestamps, check if the file has been modified
-            if !self.dir_watcher.is_none()
-                || self.get_file_last_modified(&resolved_path)? == hash_entry.last_modified
-            {
-                trace!("Found file '{}' in cache", resolved_path.display());
-                return Ok(hash_entry.hash.clone());
+                let hash = HashCache::calculate_hash(&resolved_path)?;
+
+                // add to cache
+                self.cache.insert(
+                    resolved_path.clone(),
+                    HashEntry {
+                        hash: hash.clone(),
+                        last_modified: SystemTime::now(),
+                    },
+                );
+
+                hash
             }
+        };
+
+        Ok(hash)
+    }
+
+    // same as above, but multithreaded. The returned hashes are in the same order as the paths.
+    pub async fn get_file_hashes(&self, paths: &[PathBuf]) -> Result<Vec<String>> {
+        let mut hashes = Vec::with_capacity(paths.len());
+
+        let mut futures = Vec::with_capacity(paths.len());
+
+        for path in paths {
+            let path = path.clone();
+            let self_ = self.clone();
+            futures.push(tokio::spawn(
+                async move { self_.get_file_hash(&path).await },
+            ));
         }
 
-        // not found => calculate hash
-        trace!("Calculating hash for file '{}'", resolved_path.display());
-        let file_hash = Self::calculate_hash(&resolved_path)?;
-        dir_hashes.insert(
-            file_name,
-            HashEntry {
-                hash: file_hash.clone(),
-                last_modified: self.get_file_last_modified(&resolved_path)?,
-            },
-        );
+        for future in futures {
+            hashes.push(future.await??);
+        }
 
-        Ok(file_hash)
+        Ok(hashes)
     }
 
     pub async fn clear(&self) {
-        if let Some(dir_watcher) = &self.dir_watcher {
-            let mut dir_watcher = dir_watcher.lock().await;
-
-            for dir in self.cache.iter().map(|entry| entry.key().clone()) {
-                if let Err(e) = dir_watcher.watcher.unwatch(&dir) {
-                    error!("Failed to unwatch directory: {:?}", e);
-                }
-            }
-        }
-
         // clear the cache
         self.cache.clear();
-    }
-
-    /// Handle filesystem events
-    async fn handle_directory_events(
-        mut rx: mpsc::Receiver<notify::Result<Event>>,
-        dir_watcher: Arc<Mutex<DirWatcher>>,
-        cache: Arc<DirectoryToFileHashDict>,
-    ) {
-        while let Some(res) = rx.recv().await {
-            match res {
-                Ok(event) => {
-                    // handle modify or remove events
-                    if let EventKind::Modify(_) | EventKind::Remove(_) = event.kind {
-                        // loop over paths in event
-                        for path in event.paths {
-                            trace!(
-                                "Received modify / remove event for path '{}'",
-                                path.display()
-                            );
-
-                            // get parent directory
-                            let parent_dir = match path.parent() {
-                                Some(parent) => parent,
-                                None => {
-                                    debug!("Path '{}' has no parent", path.display());
-                                    continue;
-                                }
-                            };
-
-                            // get file name
-                            let file_name: String = match path
-                                .file_name()
-                                .and_then(|name| name.to_os_string().into_string().ok())
-                            {
-                                Some(name) => name,
-                                None => {
-                                    debug!("Path '{}' has no file name", path.display());
-                                    continue;
-                                }
-                            };
-
-                            // remove file from cache
-                            let stop_watching_dir = match cache.get_mut(parent_dir) {
-                                Some(mut dir_hashes) => {
-                                    dir_hashes.remove(&file_name);
-                                    trace!("Removed file '{}' from cache", path.display());
-                                    dir_hashes.is_empty()
-                                }
-                                None => {
-                                    debug!("Directory '{}' is not in cache", parent_dir.display());
-                                    continue;
-                                }
-                            };
-
-                            if stop_watching_dir {
-                                trace!(
-                                    "No more hashes in directory '{}', unwatching",
-                                    parent_dir.display()
-                                );
-
-                                cache.remove(parent_dir);
-
-                                let mut dir_watcher = dir_watcher.lock().await;
-
-                                dir_watcher.watcher.unwatch(parent_dir).unwrap_or_else(|e| {
-                                    debug!("Failed to unwatch directory: {:?}", e)
-                                });
-                                dir_watcher.watched_dirs.remove(parent_dir);
-                            }
-                        }
-                    }
-                }
-                Err(e) => debug!("watch error: {:?}", e),
-            }
-        }
-
-        trace!("Directory event handler terminated");
-    }
-
-    /// Watch a directory for changes
-    fn watch_dir(directory: &Path, dir_watcher: &mut DirWatcher) {
-        let directory = directory.to_path_buf();
-
-        // get watcher and set of watched directories
-        let watched_dirs = &mut dir_watcher.watched_dirs;
-
-        if watched_dirs.insert(directory.clone()) {
-            // watch directory
-            match dir_watcher
-                .watcher
-                .watch(&directory, RecursiveMode::NonRecursive)
-            {
-                Ok(_) => {
-                    trace!("Watching directory '{}'", directory.display());
-                }
-                Err(e) => {
-                    debug!(
-                        "Failed to watch directory '{}': {:?}",
-                        directory.display(),
-                        e
-                    );
-                }
-            }
-        }
     }
 
     fn calculate_hash(path: &Path) -> Result<String> {
@@ -315,12 +171,6 @@ impl HashCache {
         let digest = context.compute();
 
         Ok(format!("{:x}", digest))
-    }
-
-    /// Get the last modified timestamp of a file
-    fn get_file_last_modified(&self, resolved_path: &PathBuf) -> Result<SystemTime> {
-        let metadata = std::fs::metadata(resolved_path)?;
-        Ok(metadata.modified()?)
     }
 }
 

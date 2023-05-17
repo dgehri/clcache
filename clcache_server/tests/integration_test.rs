@@ -1,7 +1,7 @@
 use std::{collections::HashMap, path::PathBuf, str::FromStr, time::Duration};
 
 use log::{error, info, trace};
-use strum_macros::{EnumString, Display};
+use std::sync::Once;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::windows::named_pipe::{ClientOptions, NamedPipeClient},
@@ -9,33 +9,11 @@ use tokio::{
     time,
 };
 use winapi::shared::winerror::ERROR_PIPE_BUSY;
-use std::sync::Once;
 
 static INIT: Once = Once::new();
 
-#[derive(EnumString, Display)]
-enum MonitoringMode {
-    /// Use timestamp of the file to detect changes
-    #[strum(serialize = "timestamp")]
-    Timestamp,
-
-    /// Watch filesystem for changes
-    #[strum(serialize = "watch")]
-    Watch,
-}
-
-
 #[tokio::test]
-async fn test_server_with_timestamps() {
-    test_server(MonitoringMode::Timestamp).await;
-}
-
-#[tokio::test]
-async fn test_server_with_monitoring() {
-    test_server(MonitoringMode::Watch).await;
-}
-
-async fn test_server(monitoring_mode: MonitoringMode) {
+async fn test_server() {
     INIT.call_once(|| {
         env_logger::builder()
             .filter_module("integration_test", log::LevelFilter::Trace)
@@ -68,7 +46,6 @@ async fn test_server(monitoring_mode: MonitoringMode) {
     let _server = Command::new(server_path)
         .arg("--idle-timeout=10")
         .arg(format!("--id={}", server_id))
-        .arg(format!("--monitoring-mode={}", monitoring_mode))
         .arg("--verbose")
         .arg("--verbose")
         .spawn()
@@ -131,11 +108,10 @@ async fn test_server(monitoring_mode: MonitoringMode) {
         );
     }
 
-    let test_file_set_2 = test_files.iter().skip(3).map(|(k, _)| {
-        let mut file_name_str = k.to_string();
-        file_name_str.push_str("?");
-        test_file_base.join(file_name_str)
-    });
+    let test_file_set_2 = test_files
+        .iter()
+        .skip(3)
+        .map(|(k, _)| test_file_base.join(k));
     let hash_set_2 = get_file_hashes(&pipe_name, &test_file_set_2.collect()).await;
 
     // check that the hashes are correct
@@ -159,9 +135,6 @@ async fn test_server(monitoring_mode: MonitoringMode) {
     // modify the file
     info!("Modifying file");
     std::fs::write(&temp_file_path, "bar").unwrap();
-
-    // sleep for 1 second to ensure that the file modification time is different
-    std::thread::sleep(std::time::Duration::from_secs(1));
 
     // request the hash of the file
     let hash2 = get_file_hashes(&pipe_name, &vec![temp_file_path.clone()]).await;
