@@ -5,6 +5,7 @@ name = "pypi"
 
 [packages]
 couchbase = "4.1.5"
+tendo = "*"
 
 [dev-packages]
 

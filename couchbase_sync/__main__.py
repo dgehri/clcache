@@ -2,7 +2,11 @@
 import contextlib
 import logging
 from server import CouchbaseServer
+from tendo import singleton
+import sys
 
+lockfile = "/tmp/couchbase_sync.lock"
+file_handle = None
 
 SERVER_LIST = ["10.105.20.235", "10.250.20.241"]
 SERVER_LOGIN = "clcache"
@@ -11,6 +15,7 @@ SERVER_PASSWORD = "clcache"
 
 def main():
     logging.basicConfig(level=logging.INFO)
+
     servers = []
     for server in SERVER_LIST:
         server = CouchbaseServer(server, SERVER_LOGIN, SERVER_PASSWORD)
@@ -31,8 +36,9 @@ def sync(from_server: CouchbaseServer, to_server: CouchbaseServer):
         for object_id in only_in_server_1:
             try:
                 # Log message with timestamp
-                logging.info(f"Syncing object {object_id} from {from_server.host} to {to_server.host}")
-                
+                logging.info(
+                    f"Syncing object {object_id} from {from_server.host} to {to_server.host}")
+
                 # fetch object from server 1
                 if o := from_server.get_object(object_id):
 
@@ -52,4 +58,9 @@ def sync(from_server: CouchbaseServer, to_server: CouchbaseServer):
 
 
 if __name__ == "__main__":
-    main()
+    # Create singleton instance
+    try:
+        me = singleton.SingleInstance()  # will sys.exit(-1) if other instance is running
+        main()
+    except singleton.SingleInstanceException:
+        sys.exit("Another instance of the app is already running, quitting.")
