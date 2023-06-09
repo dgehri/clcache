@@ -12,13 +12,14 @@ RUN mkdir -p /opt/couchbase_sync
 WORKDIR /opt/couchbase_sync
 
 # Clone couchbase_sync from https://github.com/dgehri/clcache.git
+ADD https://api.github.com/repos/dgehri/clcache/git/refs/heads/master version.json
 RUN git clone https://github.com/dgehri/clcache.git
 
 # Change into clcache/couchbase_sync
 WORKDIR /opt/couchbase_sync/clcache/couchbase_sync
 
 # Install dependencies (couchbase)
-RUN pipenv install
+RUN pipenv install --verbose
 
 # Add the sync script to the package path
 ENV PYTHONPATH=/opt/couchbase_sync/clcache/couchbase_sync
