@@ -2,17 +2,14 @@ import contextlib
 from datetime import timedelta
 import functools
 import hashlib
-from pathlib import Path
 from couchbase.auth import PasswordAuthenticator
 from couchbase.cluster import Bucket, Cluster
 from couchbase.collection import Collection
 from couchbase.options import (ClusterOptions, ClusterTimeoutOptions,
-                               GetAndTouchOptions, RemoveOptions, TouchOptions,
+                               GetOptions, RemoveOptions, TouchOptions,
                                UpsertOptions)
-from couchbase.exceptions import (DocumentNotFoundException)
 from couchbase.transcoder import *  # type: ignore
-from typing import BinaryIO
-from cache import CompilerArtifacts, Manifest, ManifestEntry
+from cache import Manifest, ManifestEntry
 
 COUCHBASE_CONNECT_TIMEOUT = timedelta(seconds=10)
 COUCHBASE_ACCESS_TIMEOUT = timedelta(seconds=10)
@@ -82,37 +79,23 @@ class CouchbaseServer:
                 "objects_data")
         return self.__coll_object_data
 
-    def get_manifest_cas(self) -> int:
-        return self._get_latest_cas("manifests")
-
-    def get_objects_cas(self) -> int:
-        return self._get_latest_cas("objects")
-
-    # TODO Rename this here and in `get_manifest_cas` and `get_objects_cas`
-    def _get_latest_cas(self, collection: str) -> int:
-        query = f"SELECT MAX(META(m).cas) AS latest_cas FROM `clcache`.`_default`.`{collection}` AS m;"
-        result = self._cluster.query(query)
-        for row in result.rows():
-            return row['latest_cas']
-        return 0
-
-    def get_objects_id_by_expiration(self) -> dict[str, int]:
-        query = """
-            SELECT META(m).id AS id, META(m).expiration AS expiration
-                FROM `clcache`.`_default`.`objects` AS m
-                WHERE META(m).expiration >= 0
-                ORDER BY META(m).expiration ASC;
+    def get_unsynced_object_ids(self) -> set[str]:
+        query = f"""
+            SELECT META(m).id AS id
+            FROM `clcache`.`_default`.`objects` AS m
+            WHERE META(m).expiration > 0
+                AND (m.`sync_source` IS MISSING
+                    OR '{self.host}' NOT IN m.`sync_source`);
             """
         result = self._cluster.query(query)
         rows = result.rows()
 
-        # convert to dict of id to expiration
-        return {row['id']: row['expiration'] for row in rows}
+        # convert to set of id
+        return {row['id'] for row in rows}
 
+    @functools.cache
     def get_object(self, key: str) -> dict | None:
-        res = self._coll_objects.get_and_touch(key, COUCHBASE_EXPIRATION,
-                                               GetAndTouchOptions(
-                                                   timeout=COUCHBASE_ACCESS_TIMEOUT))  # type: ignore
+        res = self._coll_objects.get(key, GetOptions(timeout=COUCHBASE_ACCESS_TIMEOUT))  # type: ignore
         verify_success(res)
 
         payload = res.content_as[dict]
@@ -122,15 +105,14 @@ class CouchbaseServer:
                 or "stdout" not in payload \
                 or "stderr" not in payload:
             return None
-
+        
         chunk_count = payload["chunk_count"]
         obj_data = []
         hasher = HashAlgorithm()
         for i in range(1, chunk_count + 1):
-            res = self._coll_object_data.get_and_touch(
+            res = self._coll_object_data.get(
                 f"{key}-{i}",
-                COUCHBASE_EXPIRATION,
-                GetAndTouchOptions(
+                GetOptions(
                     transcoder=RawBinaryTranscoderEx(), timeout=COUCHBASE_ACCESS_TIMEOUT
                 ),  # type: ignore
             )
@@ -152,7 +134,7 @@ class CouchbaseServer:
         payload["obj"] = b"".join(obj_data)
         return payload
 
-    def set_object(self, key: str, payload: dict):
+    def set_object(self, key: str, payload: dict, sync_source: str) -> bool:
 
         obj_data = payload["obj"]
         obj_view = memoryview(obj_data)
@@ -184,19 +166,26 @@ class CouchbaseServer:
                 timeout=COUCHBASE_ACCESS_TIMEOUT))  # type: ignore
             verify_success(res)
 
+
+        sync_sources = payload.get("sync_source", [])
+        if sync_source not in sync_sources:
+            sync_sources.append(sync_source)
+
         payload = {
             "stdout": payload["stdout"],
             "stderr": payload["stderr"],
             "chunk_count": i,
             "md5": payload["md5"],
+            "sync_source": sync_sources,
         }
+        
         res = self._coll_objects.upsert(key, payload, UpsertOptions(
             timeout=COUCHBASE_ACCESS_TIMEOUT))  # type: ignore
         verify_success(res)
 
         res = self._coll_objects.touch(
             key, COUCHBASE_EXPIRATION, timeout=COUCHBASE_ACCESS_TIMEOUT)  # type: ignore
-        verify_success(res)
+        return res.success
 
     def set_manifest(self, key: str, manifest: Manifest) -> bool:
         '''
@@ -235,9 +224,9 @@ class CouchbaseServer:
     @functools.cache
     def get_manifest(self, key: str) -> Manifest | None:
         with contextlib.suppress(Exception):
-            res = self._coll_manifests.get_and_touch(
-                key, COUCHBASE_EXPIRATION,
-                GetAndTouchOptions(timeout=COUCHBASE_ACCESS_TIMEOUT))  # type: ignore
+            res = self._coll_manifests.get(
+                key,
+                GetOptions(timeout=COUCHBASE_ACCESS_TIMEOUT))  # type: ignore
             verify_success(res)
             return Manifest(
                 [
@@ -251,6 +240,7 @@ class CouchbaseServer:
             )
         return None
 
+    @functools.cache
     def get_manifest_by_object_hash(self, object_hash: str) -> tuple[str, Manifest] | None:
         query = f"""
             SELECT META(m).id AS id
@@ -264,7 +254,9 @@ class CouchbaseServer:
             return None
 
         manifest_id = rows[0]["id"]
-        return manifest_id, self.get_manifest(manifest_id)
+        manifest = self.get_manifest(manifest_id)
+
+        return None if manifest is None else (manifest_id, manifest)
 
 
 class RawBinaryTranscoderEx(Transcoder):
