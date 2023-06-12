@@ -1,11 +1,11 @@
 
 import itertools
 import logging
+import os
 import time
 from server import CouchbaseServer
 from tendo import singleton
 import sys
-import docker
 
 lockfile = "/tmp/couchbase_sync.lock"
 file_handle = None
@@ -21,11 +21,8 @@ def main():
 
     servers = []
     try:
-        # Determine all nodes in the docker swarm
-        client = docker.DockerClient(base_url='unix://var/run/docker.sock')
-        nodes = client.nodes.list()
-        for node in nodes:
-            server_ip = node.attrs['Status']['Addr']
+        # Extract server IPs from "NODES" environment variable (comma separated list)
+        for server_ip in os.environ['NODES'].split(','):
             logging.info(f"Adding node {server_ip}")
             server = CouchbaseServer(server_ip, SERVER_LOGIN, SERVER_PASSWORD)
             ignored_object_ids = set()

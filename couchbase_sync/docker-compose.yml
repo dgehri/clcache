@@ -2,7 +2,8 @@ version: '3.3'
 services:
   couchbase_sync:
     image: couchbase_sync:latest
-    
+    environment:
+      - NODES=10.105.20.201,10.250.20.241
     deploy:
       replicas: 1
       restart_policy:
@@ -10,14 +11,9 @@ services:
         delay: 60s
         max_attempts: 3
         window: 120s
-    
     networks:
       - couchbase_sync_net
-    
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
 
 networks:
   couchbase_sync_net:
     driver: overlay
-
