@@ -23,7 +23,7 @@ RUN pipenv install --verbose
 
 # Update to tag couchbase_sync
 ADD https://api.github.com/repos/dgehri/clcache/git/refs/tags/couchbase_sync version.json
-RUN git fetch --all --tags --prune && git checkout tags/couchbase_sync --force
+RUN git fetch --all --tags --prune --force && git checkout tags/couchbase_sync --force
 
 # Re-sync pipenv
 RUN pipenv sync --verbose

@@ -1,7 +1,6 @@
 
 import itertools
 import logging
-import os
 import time
 from server import CouchbaseServer
 from tendo import singleton
@@ -11,7 +10,6 @@ import docker
 lockfile = "/tmp/couchbase_sync.lock"
 file_handle = None
 
-SERVER_LIST = ["10.105.20.235", "10.250.20.241"]
 SERVER_LOGIN = "clcache"
 SERVER_PASSWORD = "clcache"
 
@@ -24,7 +22,7 @@ def main():
     servers = []
     try:
         # Determine all nodes in the docker swarm
-        client = docker.DockerClient(base_url='unix://var/run/docker.sock')
+        client = docker.DockerClient(base_url='tcp://localhost:2375')
         nodes = client.nodes.list()
         for node in nodes:
             server_ip = node.attrs['Status']['Addr']
