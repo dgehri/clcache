@@ -22,7 +22,7 @@ def main():
     servers = []
     try:
         # Determine all nodes in the docker swarm
-        client = docker.DockerClient(base_url='tcp://localhost:2375')
+        client = docker.DockerClient(base_url='unix://var/run/docker.sock')
         nodes = client.nodes.list()
         for node in nodes:
             server_ip = node.attrs['Status']['Addr']
