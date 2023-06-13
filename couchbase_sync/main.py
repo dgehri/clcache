@@ -1,5 +1,6 @@
 import itertools
 import logging
+import concurrent.futures
 import os
 import signal
 import time
@@ -40,16 +41,21 @@ def main():
         if i != j
     ]
 
+    killer = GracefulKiller()
+
     while True:
         for pair in server_pairs:
             logging.info(f"Syncing {pair[0][0].host} to {pair[1][0].host}")
-            sync(pair[0], pair[1][0])
-            time.sleep(30)
+            sync(pair[0], pair[1][0], killer)
+
+            for _ in range(30):
+                if killer.kill_now:
+                    logging.info("Killing process")
+                    sys.exit(0)
+                time.sleep(1)
 
 
-def sync(src: tuple[CouchbaseServer, set[str]], dst_server: CouchbaseServer):
-    killer = GracefulKiller()
-    
+def sync(src: tuple[CouchbaseServer, set[str]], dst_server: CouchbaseServer, killer):
     src_server, src_ignored_object_ids = src
     sync_source = src_server.host
     sync_dest = dst_server.host
@@ -57,51 +63,29 @@ def sync(src: tuple[CouchbaseServer, set[str]], dst_server: CouchbaseServer):
     fail_count = 0
 
     try:
-        # retreive objects
-        o1 = src_server.get_unsynced_object_ids(not_from = sync_dest)
+        # retrieve objects
+        o1 = src_server.get_unsynced_object_ids(not_from=sync_dest)
         o2 = dst_server.get_unsynced_object_ids()
 
         # find objects only in server 1
         only_in_server_1 = (o1 - o2) - src_ignored_object_ids
-        
+
         logging.info(f"Found {len(only_in_server_1)} objects to sync")
 
-        for object_id in only_in_server_1:
-            if killer.kill_now:
-                logging.info("Killing process")
-                sys.exit(0)
-                
-            try:
-                if not (o := src_server.get_object(object_id)):
-                    raise RuntimeError(
-                        f"Failed to fetch object {object_id} from {src_server.host}"
-                    )
-
-                # get manifest for objects only in server 1
-                if not (result := src_server.get_manifest_by_object_hash(object_id)):
-                    src_ignored_object_ids.add(object_id)
-                    raise RuntimeError(
-                        f"Failed to fetch manifest for object {object_id} from {src_server.host}"
-                    )
-
-                (manifest_id, manifest) = result
-
-                # store in server 2 (this will merge the manifests)
-                if not dst_server.set_manifest(manifest_id, manifest):
-                    raise RuntimeError(
-                        f"Failed to store manifest for object {object_id} from {src_server.host}"
-                    )
-
-                # Store object in server 2
-                if dst_server.set_object(object_id, o, sync_source):
-                    logging.info(
-                        f"Synced object {object_id} from {src_server.host} to {dst_server.host}"
-                    )
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            futures = {
+                executor.submit(
+                    sync_object, object_id, src_server, dst_server, killer
+                ): object_id
+                for object_id in only_in_server_1
+            }
+            for future in concurrent.futures.as_completed(futures):
+                success, object_id = future.result()
+                if success:
                     sync_count += 1
-
-            except Exception as e:
-                logging.error(e)
-                fail_count += 1
+                else:
+                    fail_count += 1
+                    src_ignored_object_ids.add(object_id)
 
     except Exception as e:
         logging.error(e)
@@ -111,14 +95,59 @@ def sync(src: tuple[CouchbaseServer, set[str]], dst_server: CouchbaseServer):
     )
 
 
-class GracefulKiller:
-  kill_now = False
-  def __init__(self):
-    signal.signal(signal.SIGINT, self.exit_gracefully)
-    signal.signal(signal.SIGTERM, self.exit_gracefully)
+def sync_object(
+    object_id: str, src_server: CouchbaseServer, dst_server: CouchbaseServer, killer
+) -> bool:
+    if killer.kill_now:
+        logging.info("Killing process")
+        sys.exit(0)
 
-  def exit_gracefully(self,signum, frame):
-    self.kill_now = True
+    sync_source = src_server.host
+    result = False
+
+    try:
+        if not (o := src_server.get_object(object_id)):
+            raise RuntimeError(
+                f"Failed to fetch object {object_id} from {src_server.host}"
+            )
+
+        # get manifest for objects only in server 1
+        if not (result := src_server.get_manifest_by_object_hash(object_id)):
+            raise RuntimeError(
+                f"Failed to fetch manifest for object {object_id} from {src_server.host}"
+            )
+
+        (manifest_id, manifest) = result
+
+        # store in server 2 (this will merge the manifests)
+        if not dst_server.set_manifest(manifest_id, manifest):
+            raise RuntimeError(
+                f"Failed to store manifest for object {object_id} from {src_server.host}"
+            )
+
+        # Store object in server 2
+        if dst_server.set_object(object_id, o, sync_source):
+            logging.info(
+                f"Synced object {object_id} from {src_server.host} to {dst_server.host}"
+            )
+            result = True
+
+    except Exception as e:
+        logging.error(e)
+
+    return result
+
+
+class GracefulKiller:
+    kill_now = False
+
+    def __init__(self):
+        signal.signal(signal.SIGINT, self.exit_gracefully)
+        signal.signal(signal.SIGTERM, self.exit_gracefully)
+
+    def exit_gracefully(self, signum, frame):
+        self.kill_now = True
+
 
 if __name__ == "__main__":
     # Create singleton instance
