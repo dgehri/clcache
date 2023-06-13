@@ -45,8 +45,8 @@ def main():
 
     while True:
         for pair in server_pairs:
-            logging.info(f"Syncing {pair[0][0].host} to {pair[1][0].host}")
-            sync(pair[0], pair[1][0], killer)
+            logging.info(f"Syncing {pair[0].host} to {pair[1].host}")
+            sync(*pair, killer)
 
             for _ in range(30):
                 if killer.kill_now:
