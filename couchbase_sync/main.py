@@ -55,8 +55,8 @@ def sync(src: tuple[CouchbaseServer, set[str]], dst_server: CouchbaseServer):
 
     try:
         # retreive objects
-        o1 = src_server.get_unsynced_object_ids(sync_dest)
-        o2 = dst_server.get_unsynced_object_ids(sync_source)
+        o1 = src_server.get_unsynced_object_ids(not_from = sync_dest)
+        o2 = dst_server.get_unsynced_object_ids()
 
         # find objects only in server 1
         only_in_server_1 = (o1 - o2) - src_ignored_object_ids

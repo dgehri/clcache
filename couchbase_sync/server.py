@@ -79,14 +79,21 @@ class CouchbaseServer:
                 "objects_data")
         return self.__coll_object_data
 
-    def get_unsynced_object_ids(self, sync_target_ip: str) -> set[str]:
-        query = f"""
-            SELECT META(m).id AS id
-            FROM `clcache`.`_default`.`objects` AS m
-            WHERE META(m).expiration > 0
-                AND (m.`sync_source` IS MISSING
-                    OR '{sync_target_ip}' NOT IN m.`sync_source`);
-            """
+    def get_unsynced_object_ids(self, not_from: str | None = None) -> set[str]:
+        query = ""
+        if not not_from:
+            query = """
+                SELECT META(m).id AS id
+                FROM `clcache`.`_default`.`objects` AS m
+                WHERE META(m).expiration > 0;"""
+        else:
+            query = f"""
+                SELECT META(m).id AS id
+                FROM `clcache`.`_default`.`objects` AS m
+                WHERE META(m).expiration > 0
+                    AND (m.`sync_source` IS MISSING
+                        OR '{not_from}' NOT IN m.`sync_source`);
+                """
         result = self._cluster.query(query)
         rows = result.rows()
 
