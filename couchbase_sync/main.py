@@ -46,16 +46,21 @@ def main():
     while True:
         for pair in server_pairs:
             logging.info(f"Syncing {pair[0].host} to {pair[1].host}")
-            sync(*pair, killer)
+            sync_count = sync(*pair, killer)
+            
+            if killer.kill_now:
+                logging.info("Killing process")
+                sys.exit(0)
 
-            for _ in range(30):
-                if killer.kill_now:
-                    logging.info("Killing process")
-                    sys.exit(0)
-                time.sleep(1)
+            if sync_count == 0:
+                for _ in range(10):
+                    if killer.kill_now:
+                        logging.info("Killing process")
+                        sys.exit(0)
+                    time.sleep(1)
 
 
-def sync(src_server: CouchbaseServer, dst_server: CouchbaseServer, killer):
+def sync(src_server: CouchbaseServer, dst_server: CouchbaseServer, killer) -> int:
     sync_source = src_server.host
     sync_dest = dst_server.host
     sync_count = 0
@@ -91,6 +96,8 @@ def sync(src_server: CouchbaseServer, dst_server: CouchbaseServer, killer):
     logging.info(
         f"Synced {sync_count} objects from {sync_source} to {sync_dest} ({fail_count} failed)"
     )
+    
+    return sync_count
 
 
 def sync_object(
