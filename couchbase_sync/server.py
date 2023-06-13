@@ -94,7 +94,9 @@ class CouchbaseServer:
                     AND (m.`sync_source` IS MISSING
                         OR '{not_from}' NOT IN m.`sync_source`);
                 """
-        result = self._cluster.query(query)
+        if not (result := self._cluster.query(query)):
+            return set()
+        
         rows = result.rows()
 
         # convert to set of id

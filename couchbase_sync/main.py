@@ -7,6 +7,7 @@ import time
 from server import CouchbaseServer
 from tendo import singleton
 import sys
+import traceback
 
 lockfile = "/tmp/couchbase_sync.lock"
 file_handle = None
@@ -88,7 +89,7 @@ def sync(src: tuple[CouchbaseServer, set[str]], dst_server: CouchbaseServer, kil
                     src_ignored_object_ids.add(object_id)
 
     except Exception as e:
-        logging.error(e)
+        logging.error(f"{e}: {traceback.format_exc()}")
 
     logging.info(
         f"Synced {sync_count} objects from {sync_source} to {sync_dest} ({fail_count} failed)"
