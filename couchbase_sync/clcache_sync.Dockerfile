@@ -22,8 +22,8 @@ WORKDIR /opt/couchbase_sync/clcache/couchbase_sync
 RUN pipenv install --verbose
 
 # Update to tag couchbase_sync
-ADD https://api.github.com/repos/dgehri/clcache/git/refs/tags/couchbase_sync version.json
-RUN git fetch --all --tags --prune --force && git checkout tags/couchbase_sync --force
+ADD https://api.github.com/repos/dgehri/clcache/git/refs/heads/master version.json
+RUN git fetch --all --tags --prune --force && git checkout master --force
 
 # Re-sync pipenv
 RUN pipenv sync --verbose

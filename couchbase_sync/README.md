@@ -1,3 +1,5 @@
+# Deploy Couchbase and Couchbase-Sync
+
 1. Create swarm: `docker swarm init`
 2. Create secret: `echo <password> | docker secret create couchbase_admin_password`
 3. Build images:
@@ -17,3 +19,8 @@
    - `docker container ls` then `docker container logs <container_id>`
    - `docker service logs -f clcache_sync`
   
+# Update Couchbase and Couchbase-Sync
+
+1. Update images (see above)
+2. Update stack: `docker service update --image 10.250.20.241:5000/couchbase_sync:latest clcache_couchbase_sync`
+

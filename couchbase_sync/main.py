@@ -128,7 +128,7 @@ def sync_object(
         # Store object in server 2
         if dst_server.set_object(object_id, o, sync_source):
             logging.info(
-                f"Synced object {object_id} from {src_server.host} to {dst_server.host}"
+                f"Synced object {object_id} from {src_server.host} to {dst_server.host} (thread ID {os.getpid()}))"
             )
             result = True
 
