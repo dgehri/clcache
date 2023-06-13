@@ -1,6 +1,19 @@
-1. docker swarm init
-2. docker image build -t couchbase_sync:latest clcache_sync.Dockerfile
-3. cd couchbase && docker image build -t couchbase:latest .
-4. docker stack deploy -c docker-compose.yml clcache
-5. docker service ls
-6. docker service logs couchbase_sync_couchbase_sync -f
+1. Create swarm: `docker swarm init`
+2. Create secret: `echo <password> | docker secret create couchbase_admin_password`
+3. Build images:
+    3.1. Couchbase
+        - `pushd couchbase`
+        - `docker image build -t couchbase_clcache:latest .`
+        - `docker tag couchbase_clcache:latest 10.250.20.241:5000/couchbase_clcache:latest`
+        - `docker image push 10.250.20.241:5000/couchbase_clcache:latest`
+        - `popd`
+    3.2. Couchbase-Sync
+        - `docker image build -t couchbase_sync:latest -f clcache_sync.Dockerfile .`
+        - `docker tag couchbase_sync:latest 10.250.20.241:5000/couchbase_sync:latest`
+        - `docker image push 10.250.20.241:5000/couchbase_sync:latest`
+4. Create and deploy stack: `docker stack deploy -c docker-compose.yml clcache`
+5. Verify stack: `docker stack ps clcache`
+6. Read logs: 
+   - `docker container ls` then `docker container logs <container_id>`
+   - `docker service logs -f clcache_sync`
+  

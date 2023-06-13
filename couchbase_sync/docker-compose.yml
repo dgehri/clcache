@@ -1,19 +1,31 @@
 version: '3.3'
 services:
   couchbase_clcache:
-    image: couchbase_clcache:latest
-    environment:
-      - COUCHBASE_ADMIN_PASSWORD=gdb*vrt.EYN3ufq6xwd
+    image: 10.250.20.241:5000/couchbase_clcache:latest
+    secrets:
+      - couchbase_admin_password
     ports:
-      - "8091:8091"
-      - "8092:8092"
-      - "8093:8093"
-      - "8094:8094"
-      - "8095:8095"
-      - "8096:8096"
-      - "8097:8097"
-      - "11210:11210"
-      - "11280:11280"
+      - target: 8091
+        published: 8091
+        protocol: tcp
+        mode: host
+      - target: 8092
+        published: 8092
+        protocol: tcp
+        mode: host
+      - target: 8093
+        published: 8093
+        protocol: tcp
+        mode: host
+      - target: 8094
+        published: 8094
+        protocol: tcp
+        mode: host
+      - target: 11210
+        published: 11210
+        protocol: tcp
+        mode: host
+      
     volumes:
       - /mnt/data/couchbase:/opt/couchbase/var
     deploy:
@@ -23,7 +35,7 @@ services:
         window: 120s
 
   couchbase_sync:
-    image: couchbase_sync:latest
+    image: 10.250.20.241:5000/couchbase_sync:latest
     environment:
       - NODES=10.105.20.235,10.250.20.241
     deploy:
@@ -32,3 +44,6 @@ services:
         delay: 60s
         window: 120s
 
+secrets:
+  couchbase_admin_password:
+    external: true

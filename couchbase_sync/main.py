@@ -60,6 +60,8 @@ def sync(src: tuple[CouchbaseServer, set[str]], dst_server: CouchbaseServer):
 
         # find objects only in server 1
         only_in_server_1 = (o1 - o2) - src_ignored_object_ids
+        
+        logging.info(f"Found {len(only_in_server_1)} objects to sync")
 
         for object_id in only_in_server_1:
             try:

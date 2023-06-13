@@ -2,6 +2,9 @@
 
 set -m
 
+# Read COUCHBASE_ADMIN_PASSWORD from /run/secrets/couchbase_admin_password
+COUCHBASE_ADMIN_PASSWORD=$(cat /run/secrets/couchbase_admin_password)
+
 /entrypoint.sh couchbase-server &
 
 echo "Waiting for Couchbase Server to be available..."
@@ -13,6 +16,8 @@ echo "Couchbase Server is available, configuring it..."
 # Get total memory and calculate 75% of it
 TOTAL_MEMORY=$(free -m | awk '/^Mem:/{print $2}')
 DATA_MEMORY=$(echo "scale=0; (${TOTAL_MEMORY} * 0.75)/1" | bc -l)
+# Bucket gets 5% less than the calculated value
+BUCKET_RAMSIZE=$(echo "scale=0; (${DATA_MEMORY} * 0.95)/1" | bc -l)
 
 # Setup initial cluster/ Initialize Node
 couchbase-cli cluster-init -c 127.0.0.1 --cluster-username Administrator --cluster-password "${COUCHBASE_ADMIN_PASSWORD}" \
@@ -23,7 +28,7 @@ couchbase-cli cluster-init -c 127.0.0.1 --cluster-username Administrator --clust
 CONNECTION="-c 127.0.0.1 --username Administrator --password ${COUCHBASE_ADMIN_PASSWORD}"
 
 # Create the buckets
-couchbase-cli bucket-create ${CONNECTION} --bucket-type couchbase --bucket-ramsize 100 --bucket clcache
+couchbase-cli bucket-create ${CONNECTION} --bucket-type couchbase --bucket-ramsize ${BUCKET_RAMSIZE} --bucket clcache
 
 # Create manifests collection
 couchbase-cli collection-manage ${CONNECTION} --bucket clcache --create-collection _default.manifests
@@ -54,7 +59,9 @@ done
 # Create indices:
 #  - idx_entries_objectHash: CREATE INDEX `idx_entries_objectHash` ON `clcache`.`_default`.`manifests`((distinct (array (`v`.`objectHash`) for `v` in `entries` end)))
 #  - idx_expiration_sync_source: CREATE INDEX `idx_expiration_sync_source` ON `clcache`.`_default`.`objects`((meta().`expiration`),`sync_source`) WHERE (0 < (meta().`expiration`))
+#  - #primary: CREATE PRIMARY INDEX `#primary` ON `clcache`.`_default`.`objects`
 cbq ${CONNECTION} --script="CREATE INDEX \`idx_entries_objectHash\` ON \`clcache\`.\`_default\`.\`manifests\`((distinct (array (\`v\`.\`objectHash\`) for \`v\` in \`entries\` end)));"
 cbq ${CONNECTION} --script="CREATE INDEX \`idx_expiration_sync_source\` ON \`clcache\`.\`_default\`.\`objects\`((meta().\`expiration\`),\`sync_source\`) WHERE (0 < (meta().\`expiration\`));"
+cbq ${CONNECTION} --script="CREATE PRIMARY INDEX \`#primary\` ON \`clcache\`.\`_default\`.\`objects\`;"
 
 fg 1
