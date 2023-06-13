@@ -30,8 +30,7 @@ def main():
         for server_ip in os.environ["NODES"].split(","):
             logging.info(f"Adding node {server_ip}")
             server = CouchbaseServer(server_ip, SERVER_LOGIN, SERVER_PASSWORD)
-            ignored_object_ids = set()
-            servers.append((server, ignored_object_ids))
+            servers.append(server)
     except Exception as e:
         logging.error(e)
         sys.exit(1)
@@ -56,8 +55,7 @@ def main():
                 time.sleep(1)
 
 
-def sync(src: tuple[CouchbaseServer, set[str]], dst_server: CouchbaseServer, killer):
-    src_server, src_ignored_object_ids = src
+def sync(src_server: CouchbaseServer, dst_server: CouchbaseServer, killer):
     sync_source = src_server.host
     sync_dest = dst_server.host
     sync_count = 0
@@ -69,7 +67,7 @@ def sync(src: tuple[CouchbaseServer, set[str]], dst_server: CouchbaseServer, kil
         o2 = dst_server.get_unsynced_object_ids()
 
         # find objects only in server 1
-        only_in_server_1 = (o1 - o2) - src_ignored_object_ids
+        only_in_server_1 = o1 - o2
 
         logging.info(f"Found {len(only_in_server_1)} objects to sync")
 
@@ -81,12 +79,12 @@ def sync(src: tuple[CouchbaseServer, set[str]], dst_server: CouchbaseServer, kil
                 for object_id in only_in_server_1
             }
             for future in concurrent.futures.as_completed(futures):
-                success, object_id = future.result()
-                if success:
-                    sync_count += 1
-                else:
-                    fail_count += 1
-                    src_ignored_object_ids.add(object_id)
+                if result := future.result():
+                    success, object_id = result
+                    if success:
+                        sync_count += 1
+                    else:
+                        fail_count += 1
 
     except Exception as e:
         logging.error(f"{e}: {traceback.format_exc()}")
@@ -114,6 +112,8 @@ def sync_object(
 
         # get manifest for objects only in server 1
         if not (result := src_server.get_manifest_by_object_hash(object_id)):
+            # delete object
+            src_server.delete_object(object_id)
             raise RuntimeError(
                 f"Failed to fetch manifest for object {object_id} from {src_server.host}"
             )

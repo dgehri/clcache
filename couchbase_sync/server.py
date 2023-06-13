@@ -5,9 +5,14 @@ import hashlib
 from couchbase.auth import PasswordAuthenticator
 from couchbase.cluster import Bucket, Cluster
 from couchbase.collection import Collection
-from couchbase.options import (ClusterOptions, ClusterTimeoutOptions,
-                               GetOptions, RemoveOptions, TouchOptions,
-                               UpsertOptions)
+from couchbase.options import (
+    ClusterOptions,
+    ClusterTimeoutOptions,
+    GetOptions,
+    RemoveOptions,
+    TouchOptions,
+    UpsertOptions,
+)
 from couchbase.transcoder import *  # type: ignore
 from cache import Manifest, ManifestEntry
 
@@ -51,7 +56,8 @@ class CouchbaseServer:
     def _cluster(self) -> Cluster:
         if not self.__cluster:
             self.__cluster = Cluster(
-                f"couchbase://{self.host}", self._opts)  # type: ignore
+                f"couchbase://{self.host}", self._opts
+            )  # type: ignore
         return self.__cluster
 
     @property
@@ -75,8 +81,7 @@ class CouchbaseServer:
     @property
     def _coll_object_data(self) -> Collection:
         if not self.__coll_object_data:
-            self.__coll_object_data = self._bucket.collection(
-                "objects_data")
+            self.__coll_object_data = self._bucket.collection("objects_data")
         return self.__coll_object_data
 
     def get_unsynced_object_ids(self, not_from: str | None = None) -> set[str]:
@@ -96,11 +101,11 @@ class CouchbaseServer:
                 """
         if not (result := self._cluster.query(query)):
             return set()
-        
+
         rows = result.rows()
 
         # convert to set of id
-        return {row['id'] for row in rows}
+        return {row["id"] for row in rows}
 
     @functools.cache
     def get_object(self, key: str) -> dict | None:
@@ -109,12 +114,14 @@ class CouchbaseServer:
 
         payload = res.content_as[dict]
 
-        if "chunk_count" not in payload \
-                or "md5" not in payload \
-                or "stdout" not in payload \
-                or "stderr" not in payload:
+        if (
+            "chunk_count" not in payload
+            or "md5" not in payload
+            or "stdout" not in payload
+            or "stderr" not in payload
+        ):
             return None
-        
+
         chunk_count = payload["chunk_count"]
         obj_data = []
         hasher = HashAlgorithm()
@@ -134,8 +141,9 @@ class CouchbaseServer:
             res = self._coll_objects.remove(key)
             verify_success(res)
             for i in range(1, chunk_count + 1):
-                res = self._coll_object_data.remove(f"{key}-{i}",
-                                                    RemoveOptions(timeout=COUCHBASE_ACCESS_TIMEOUT))  # type: ignore
+                res = self._coll_object_data.remove(
+                    f"{key}-{i}", RemoveOptions(timeout=COUCHBASE_ACCESS_TIMEOUT)
+                )  # type: ignore
                 verify_success(res)
 
             return None
@@ -143,13 +151,28 @@ class CouchbaseServer:
         payload["obj"] = b"".join(obj_data)
         return payload
 
-    def set_object(self, key: str, payload: dict, sync_source: str) -> bool:
+    def delete_object(self, key: str) -> None:
+        res = self._coll_objects.get(key, GetOptions(timeout=COUCHBASE_ACCESS_TIMEOUT))  # type: ignore
+        if not res.success:
+            return
 
+        payload = res.content_as[dict]
+
+        if "chunk_count" not in payload:
+            return
+
+        chunk_count = payload["chunk_count"]
+        for i in range(1, chunk_count + 1):
+            self._coll_object_data.remove(f"{key}-{i}", RemoveOptions(timeout=COUCHBASE_ACCESS_TIMEOUT))  # type: ignore
+
+        self._coll_objects.remove(key)
+
+    def set_object(self, key: str, payload: dict, sync_source: str) -> bool:
         obj_data = payload["obj"]
         obj_view = memoryview(obj_data)
         hasher = HashAlgorithm()
         hasher.update(obj_view)
-        
+
         if hasher.hexdigest() != payload["md5"]:
             raise RuntimeError("Hash mismatch")
 
@@ -165,16 +188,17 @@ class CouchbaseServer:
                 sub_key,
                 obj_view[s:e],  # type: ignore
                 UpsertOptions(
-                    transcoder=RawBinaryTranscoderEx(),
-                    timeout=COUCHBASE_ACCESS_TIMEOUT)  # type: ignore
-                ,
+                    transcoder=RawBinaryTranscoderEx(), timeout=COUCHBASE_ACCESS_TIMEOUT
+                ),  # type: ignore
             )
             verify_success(res)
 
-            res = self._coll_object_data.touch(sub_key, COUCHBASE_EXPIRATION, TouchOptions(
-                timeout=COUCHBASE_ACCESS_TIMEOUT))  # type: ignore
+            res = self._coll_object_data.touch(
+                sub_key,
+                COUCHBASE_EXPIRATION,
+                TouchOptions(timeout=COUCHBASE_ACCESS_TIMEOUT),
+            )  # type: ignore
             verify_success(res)
-
 
         sync_sources = payload.get("sync_source", [])
         if sync_source not in sync_sources:
@@ -187,17 +211,19 @@ class CouchbaseServer:
             "md5": payload["md5"],
             "sync_source": sync_sources,
         }
-        
-        res = self._coll_objects.upsert(key, payload, UpsertOptions(
-            timeout=COUCHBASE_ACCESS_TIMEOUT))  # type: ignore
+
+        res = self._coll_objects.upsert(
+            key, payload, UpsertOptions(timeout=COUCHBASE_ACCESS_TIMEOUT)
+        )  # type: ignore
         verify_success(res)
 
         res = self._coll_objects.touch(
-            key, COUCHBASE_EXPIRATION, timeout=COUCHBASE_ACCESS_TIMEOUT)  # type: ignore
+            key, COUCHBASE_EXPIRATION, timeout=COUCHBASE_ACCESS_TIMEOUT
+        )  # type: ignore
         return res.success
 
     def set_manifest(self, key: str, manifest: Manifest) -> bool:
-        '''
+        """
         Set the manifest in the remote cache
 
         Important:
@@ -206,23 +232,23 @@ class CouchbaseServer:
             between the time we fetch the existing manifest and the time we write
             the new manifest.
 
-            Also, we are likely to write a manifest referencing object keys 
+            Also, we are likely to write a manifest referencing object keys
             that do not exist in the remote cache. This is not a major issue, as
             the result is simply that retrieving the object will fail.
-        '''
+        """
         try:
             # First fetch existing manifest
             if remote_manifest := self.get_manifest(key):
                 # Merge the manifests
-                entries = list(
-                    set(remote_manifest.entries() + manifest.entries()))
+                entries = list(set(remote_manifest.entries() + manifest.entries()))
                 manifest = Manifest(entries)
 
             entries = [e._asdict() for e in manifest.entries()]
             json_object = {"entries": entries}
             if coll_manifests := self._coll_manifests:
-                res = coll_manifests.upsert(key, json_object, UpsertOptions(
-                    timeout=COUCHBASE_ACCESS_TIMEOUT))  # type: ignore
+                res = coll_manifests.upsert(
+                    key, json_object, UpsertOptions(timeout=COUCHBASE_ACCESS_TIMEOUT)
+                )  # type: ignore
                 verify_success(res)
                 res = coll_manifests.touch(key, COUCHBASE_EXPIRATION)
                 verify_success(res)
@@ -234,15 +260,13 @@ class CouchbaseServer:
     def get_manifest(self, key: str) -> Manifest | None:
         with contextlib.suppress(Exception):
             res = self._coll_manifests.get(
-                key,
-                GetOptions(timeout=COUCHBASE_ACCESS_TIMEOUT))  # type: ignore
+                key, GetOptions(timeout=COUCHBASE_ACCESS_TIMEOUT)
+            )  # type: ignore
             verify_success(res)
             return Manifest(
                 [
                     ManifestEntry(
-                        e["includeFiles"],
-                        e["includesContentHash"],
-                        e["objectHash"]
+                        e["includeFiles"], e["includesContentHash"], e["objectHash"]
                     )
                     for e in res.content_as[dict]["entries"]
                 ]
@@ -250,7 +274,9 @@ class CouchbaseServer:
         return None
 
     @functools.cache
-    def get_manifest_by_object_hash(self, object_hash: str) -> tuple[str, Manifest] | None:
+    def get_manifest_by_object_hash(
+        self, object_hash: str
+    ) -> tuple[str, Manifest] | None:
         query = f"""
             SELECT META(m).id AS id
             FROM `clcache`.`_default`.`manifests` AS m
@@ -269,10 +295,7 @@ class CouchbaseServer:
 
 
 class RawBinaryTranscoderEx(Transcoder):
-    def encode_value(
-        self, value: Union[bytes, bytearray]
-    ) -> tuple[bytes, int]:
-
+    def encode_value(self, value: Union[bytes, bytearray]) -> tuple[bytes, int]:
         if not isinstance(value, (bytes, (bytearray, memoryview))):
             raise ValueFormatException(
                 "Only binary data supported by RawBinaryTranscoder"
@@ -281,12 +304,7 @@ class RawBinaryTranscoderEx(Transcoder):
             value = bytes(value)
         return value, FMT_BYTES
 
-    def decode_value(
-        self,
-        value: bytes,
-        flags: int
-    ) -> bytes:
-
+    def decode_value(self, value: bytes, flags: int) -> bytes:
         fmt = get_decode_format(flags)
 
         if fmt == FMT_BYTES:
