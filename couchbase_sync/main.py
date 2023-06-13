@@ -1,6 +1,7 @@
 import itertools
 import logging
 import os
+import signal
 import time
 from server import CouchbaseServer
 from tendo import singleton
@@ -47,6 +48,8 @@ def main():
 
 
 def sync(src: tuple[CouchbaseServer, set[str]], dst_server: CouchbaseServer):
+    killer = GracefulKiller()
+    
     src_server, src_ignored_object_ids = src
     sync_source = src_server.host
     sync_dest = dst_server.host
@@ -64,6 +67,10 @@ def sync(src: tuple[CouchbaseServer, set[str]], dst_server: CouchbaseServer):
         logging.info(f"Found {len(only_in_server_1)} objects to sync")
 
         for object_id in only_in_server_1:
+            if killer.kill_now:
+                logging.info("Killing process")
+                sys.exit(0)
+                
             try:
                 if not (o := src_server.get_object(object_id)):
                     raise RuntimeError(
@@ -103,6 +110,15 @@ def sync(src: tuple[CouchbaseServer, set[str]], dst_server: CouchbaseServer):
         f"Synced {sync_count} objects from {sync_source} to {sync_dest} ({fail_count} failed)"
     )
 
+
+class GracefulKiller:
+  kill_now = False
+  def __init__(self):
+    signal.signal(signal.SIGINT, self.exit_gracefully)
+    signal.signal(signal.SIGTERM, self.exit_gracefully)
+
+  def exit_gracefully(self,signum, frame):
+    self.kill_now = True
 
 if __name__ == "__main__":
     # Create singleton instance
