@@ -79,8 +79,7 @@ def sync(src_server: CouchbaseServer, dst_server: CouchbaseServer, killer):
                 for object_id in only_in_server_1
             }
             for future in concurrent.futures.as_completed(futures):
-                if result := future.result():
-                    success, object_id = result
+                if success := future.result():
                     if success:
                         sync_count += 1
                     else:
