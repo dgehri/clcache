@@ -1,5 +1,27 @@
 version: '3.3'
 services:
+  couchbase_clcache:
+    image: couchbase_clcache:latest
+    environment:
+      - COUCHBASE_ADMIN_PASSWORD=gdb*vrt.EYN3ufq6xwd
+    ports:
+      - "8091:8091"
+      - "8092:8092"
+      - "8093:8093"
+      - "8094:8094"
+      - "8095:8095"
+      - "8096:8096"
+      - "8097:8097"
+      - "11210:11210"
+      - "11280:11280"
+    volumes:
+      - /mnt/data/couchbase:/opt/couchbase/var
+    deploy:
+      replicas: 2
+      restart_policy:
+        delay: 60s
+        window: 120s
+
   couchbase_sync:
     image: couchbase_sync:latest
     environment:
@@ -9,3 +31,4 @@ services:
       restart_policy:
         delay: 60s
         window: 120s
+

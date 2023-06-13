@@ -30,4 +30,4 @@ RUN pipenv sync --verbose
 
 # When container is run, execute the following command
 # /usr/local/bin/pipenv run python3 -m /opt/couchbase_sync/clcache/couchbase_sync/__main__.py
-ENTRYPOINT ["/usr/local/bin/pipenv", "run", "python3", "/opt/couchbase_sync/clcache/couchbase_sync/__main__.py"]
+ENTRYPOINT ["/usr/local/bin/pipenv", "run", "python3", "/opt/couchbase_sync/clcache/couchbase_sync/main.py"]
