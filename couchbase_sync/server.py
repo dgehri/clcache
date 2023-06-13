@@ -156,6 +156,8 @@ class CouchbaseServer:
             # give object a chance to be find parent manifest
             self._orphaned_objects.add(key)
             return
+        
+        self._orphaned_objects.remove(key)
 
         res = self._coll_objects.get(key, GetOptions(timeout=COUCHBASE_ACCESS_TIMEOUT))  # type: ignore
         if not res.success:

@@ -24,3 +24,5 @@
 1. Update images (see above)
 2. Update stack: `docker service update --image 10.250.20.241:5000/couchbase_sync:latest clcache_couchbase_sync`
 
+One-liner: `docker image build -t couchbase_sync:latest -f clcache_sync.Dockerfile . && docker tag couchbase_clcache:latest 10.250.20.241:5000/couchbase_clcache:latest && docker image push 10.250.20.241:5000/couchbase_clcache:latest && docker service update --image 10.250.20.241:5000/couchbase_sync:latest clcache_couchbase_sync`
+
