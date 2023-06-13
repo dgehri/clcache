@@ -42,6 +42,7 @@ class CouchbaseServer:
         self.__coll_manifests = None
         self.__coll_objects = None
         self.__coll_object_data = None
+        self._orphaned_objects: set[str] = set()
 
         self._opts = ClusterOptions(
             authenticator=PasswordAuthenticator(self.user, self.pwd),
@@ -107,7 +108,6 @@ class CouchbaseServer:
         # convert to set of id
         return {row["id"] for row in rows}
 
-    @functools.cache
     def get_object(self, key: str) -> dict | None:
         res = self._coll_objects.get(key, GetOptions(timeout=COUCHBASE_ACCESS_TIMEOUT))  # type: ignore
         verify_success(res)
@@ -152,6 +152,11 @@ class CouchbaseServer:
         return payload
 
     def delete_object(self, key: str) -> None:
+        if key not in self._orphaned_objects:
+            # give object a chance to be find parent manifest
+            self._orphaned_objects.add(key)
+            return
+
         res = self._coll_objects.get(key, GetOptions(timeout=COUCHBASE_ACCESS_TIMEOUT))  # type: ignore
         if not res.success:
             return
