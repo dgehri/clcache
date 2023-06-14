@@ -301,9 +301,9 @@ class CacheCouchbaseStrategy:
                 verify_success(res)
                 res = coll_manifests.touch(key, COUCHBASE_EXPIRATION)
                 verify_success(res)
-        except Exception:
+        except Exception as e:
             self._is_bad = True
-            log(f"Could not set {key} in remote cache", level=LogLevel.TRACE)
+            log(f"Could not set {key} in remote cache: {str(e)}", level=LogLevel.TRACE)
 
     @functools.cache
     def get_manifest(self, key: str) -> Manifest | None:

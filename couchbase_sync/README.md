@@ -6,13 +6,13 @@
     3.1. Couchbase
         - `pushd couchbase`
         - `docker image build -t couchbase_clcache:latest .`
-        - `docker tag couchbase_clcache:latest 10.250.20.241:5000/couchbase_clcache:latest`
-        - `docker image push 10.250.20.241:5000/couchbase_clcache:latest`
+        - `docker tag couchbase_clcache:latest us-docker.pkg.dev/inr-ci/inr-docker/couchbase_clcache:latest`
+        - `docker image push us-docker.pkg.dev/inr-ci/inr-docker/couchbase_clcache:latest`
         - `popd`
     3.2. Couchbase-Sync
         - `docker image build -t couchbase_sync:latest -f clcache_sync.Dockerfile .`
-        - `docker tag couchbase_sync:latest 10.250.20.241:5000/couchbase_sync:latest`
-        - `docker image push 10.250.20.241:5000/couchbase_sync:latest`
+        - `docker tag couchbase_sync:latest us-docker.pkg.dev/inr-ci/inr-docker/couchbase_sync:latest`
+        - `docker image push us-docker.pkg.dev/inr-ci/inr-docker/couchbase_sync:latest`
 4. Create and deploy stack: `docker stack deploy -c docker-compose.yml clcache`
 5. Verify stack: `docker stack ps clcache`
 6. Read logs: 
@@ -22,13 +22,13 @@
 # Update Couchbase and Couchbase-Sync
 
 1. Update images (see above)
-2. Update stack: `docker service update --image 10.250.20.241:5000/couchbase_sync:latest clcache_couchbase_sync`
+2. Update stack: `docker service update --image us-docker.pkg.dev/inr-ci/inr-docker/couchbase_sync:latest clcache_couchbase_sync`
 
 
 ```bash
 docker image build -t couchbase_sync:latest -f clcache_sync.Dockerfile .
-docker tag couchbase_sync:latest 10.250.20.241:5000/couchbase_sync:latest
-docker image push 10.250.20.241:5000/couchbase_sync:latest
-docker service update --image 10.250.20.241:5000/couchbase_sync:latest clcache_couchbase_sync
+docker tag couchbase_sync:latest us-docker.pkg.dev/inr-ci/inr-docker/couchbase_sync:latest
+docker image push us-docker.pkg.dev/inr-ci/inr-docker/couchbase_sync:latest
+docker service update --image us-docker.pkg.dev/inr-ci/inr-docker/couchbase_sync:latest clcache_couchbase_sync
 ```
 

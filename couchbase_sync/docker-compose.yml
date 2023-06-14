@@ -1,7 +1,7 @@
 version: '3.3'
 services:
   couchbase_clcache:
-    image: 10.250.20.241:5000/couchbase_clcache:latest
+    image: us-docker.pkg.dev/inr-ci/inr-docker/couchbase_clcache:latest
     secrets:
       - couchbase_admin_password
     ports:
@@ -35,7 +35,7 @@ services:
         window: 120s
 
   couchbase_sync:
-    image: 10.250.20.241:5000/couchbase_sync:latest
+    image: us-docker.pkg.dev/inr-ci/inr-docker/couchbase_sync:latest
     environment:
       - NODES=10.105.20.235,10.250.20.241
     deploy:
