@@ -81,11 +81,10 @@ def sync(src_server: CouchbaseServer, dst_server: CouchbaseServer, killer) -> in
                 for object_id in only_in_server_1
             }
             for future in concurrent.futures.as_completed(futures):
-                if success := future.result():
-                    if success:
-                        sync_count += 1
-                    else:
-                        fail_count += 1
+                if future.result():
+                    sync_count += 1
+                else:
+                    fail_count += 1
 
     except Exception as e:
         logging.error(f"[{src_server.host} -> {dst_server.host}] {e}: {traceback.format_exc()}")
