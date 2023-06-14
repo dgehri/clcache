@@ -28,7 +28,7 @@ class CacheBadException(Exception):
 
 def verify_success(result):
     if not result.success:
-        raise CacheBadException
+        raise CacheBadException(result)
 
 
 class CouchbaseServer:
@@ -156,7 +156,7 @@ class CouchbaseServer:
             # give object a chance to be find parent manifest
             self._orphaned_objects.add(key)
             return
-        
+
         self._orphaned_objects.remove(key)
 
         res = self._coll_objects.get(key, GetOptions(timeout=COUCHBASE_ACCESS_TIMEOUT))  # type: ignore
@@ -259,9 +259,10 @@ class CouchbaseServer:
                 verify_success(res)
                 res = coll_manifests.touch(key, COUCHBASE_EXPIRATION)
                 verify_success(res)
-            return True
-        except Exception:
-            return False
+        except Exception as e:
+            # Add context and raise exception
+            e.args = (f"Failed to set manifest for key {key}: {e}",)
+            raise e
 
     @functools.cache
     def get_manifest(self, key: str) -> Manifest | None:

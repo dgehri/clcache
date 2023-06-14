@@ -20,7 +20,7 @@ def main():
     # Log with timestamp
     logging.basicConfig(
         level=logging.INFO,
-        format="%(asctime)s [%(thread)d] %(levelname)s %(message)s",
+        format="%(asctime)s %(levelname)s %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
     )
 
@@ -45,36 +45,33 @@ def main():
 
     while True:
         for pair in server_pairs:
-            logging.info(f"Syncing {pair[0].host} to {pair[1].host}")
             sync_count = sync(*pair, killer)
             
             if killer.kill_now:
-                logging.info("Killing process")
+                logging.info("Exiting")
                 sys.exit(0)
 
             if sync_count == 0:
                 for _ in range(10):
                     if killer.kill_now:
-                        logging.info("Killing process")
+                        logging.info("Exiting")
                         sys.exit(0)
                     time.sleep(1)
 
 
 def sync(src_server: CouchbaseServer, dst_server: CouchbaseServer, killer) -> int:
-    sync_source = src_server.host
-    sync_dest = dst_server.host
     sync_count = 0
     fail_count = 0
 
     try:
         # retrieve objects
-        o1 = src_server.get_unsynced_object_ids(not_from=sync_dest)
+        o1 = src_server.get_unsynced_object_ids(not_from=dst_server.host)
         o2 = dst_server.get_unsynced_object_ids()
 
         # find objects only in server 1
         only_in_server_1 = o1 - o2
 
-        logging.info(f"Found {len(only_in_server_1)} objects to sync")
+        logging.info(f"[{src_server.host} -> {dst_server.host}] Found {len(only_in_server_1)} objects to sync")
 
         with concurrent.futures.ThreadPoolExecutor() as executor:
             futures = {
@@ -91,10 +88,10 @@ def sync(src_server: CouchbaseServer, dst_server: CouchbaseServer, killer) -> in
                         fail_count += 1
 
     except Exception as e:
-        logging.error(f"{e}: {traceback.format_exc()}")
+        logging.error(f"[{src_server.host} -> {dst_server.host}] {e}: {traceback.format_exc()}")
 
     logging.info(
-        f"Synced {sync_count} objects from {sync_source} to {sync_dest} ({fail_count} failed)"
+        f"[{src_server.host} -> {dst_server.host}] Synced {sync_count} objects (failed {fail_count})"
     )
     
     return sync_count
@@ -104,7 +101,7 @@ def sync_object(
     object_id: str, src_server: CouchbaseServer, dst_server: CouchbaseServer, killer
 ) -> bool:
     if killer.kill_now:
-        logging.info("Killing process")
+        logging.info("Exiting")
         sys.exit(0)
 
     sync_source = src_server.host
@@ -113,7 +110,7 @@ def sync_object(
     try:
         if not (o := src_server.get_object(object_id)):
             raise RuntimeError(
-                f"Failed to fetch object {object_id} from {src_server.host}"
+                f"Failed to fetch object {object_id}"
             )
 
         # get manifest for objects only in server 1
@@ -121,26 +118,23 @@ def sync_object(
             # delete object
             src_server.delete_object(object_id)
             raise RuntimeError(
-                f"Failed to fetch manifest for object {object_id} from {src_server.host}"
+                f"Failed to fetch manifest for object {object_id}"
             )
 
         (manifest_id, manifest) = result
 
         # store in server 2 (this will merge the manifests)
-        if not dst_server.set_manifest(manifest_id, manifest):
-            raise RuntimeError(
-                f"Failed to store manifest for object {object_id} from {src_server.host}"
-            )
+        dst_server.set_manifest(manifest_id, manifest)
 
         # Store object in server 2
         if dst_server.set_object(object_id, o, sync_source):
             logging.info(
-                f"Synced object {object_id} from {src_server.host} to {dst_server.host}"
+                f"[{src_server.host} -> {dst_server.host}] Synced object {object_id}"
             )
             result = True
 
     except Exception as e:
-        logging.error(e)
+        logging.error(f"[{src_server.host} -> {dst_server.host}] {e}")
 
     return result
 
