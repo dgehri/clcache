@@ -108,6 +108,18 @@ class CouchbaseServer:
         # convert to set of id
         return {row["id"] for row in rows}
 
+    def test_objects(self, keys: list[str]) -> list[str]:
+        # Convert to comma separated string, with quotes around each key
+        query = f"""
+            SELECT META(o).id AS id
+            FROM `clcache`.`_default`.`objects` AS o
+            WHERE META(o).id IN [{",".join( [f'"{key}"' for key in keys])}]
+            """
+        if not (result := self._cluster.query(query)):
+            return []
+
+        return [row["id"] for row in result.rows()]
+
     def get_object(self, key: str) -> dict | None:
         res = self._coll_objects.get(key, GetOptions(timeout=COUCHBASE_ACCESS_TIMEOUT))  # type: ignore
         verify_success(res)
@@ -250,7 +262,17 @@ class CouchbaseServer:
                 entries = list(set(remote_manifest.entries() + manifest.entries()))
                 manifest = Manifest(entries)
 
-            entries = [e._asdict() for e in manifest.entries()]
+            # Get object IDs referenced by manifest
+            object_ids = [entry.objectHash for entry in manifest.entries()]
+
+            # Remove any object IDs not in the remote cache
+            filtered_object_ids = self.test_objects(object_ids)
+
+            entries = [
+                e._asdict()
+                for e in manifest.entries()
+                if e.objectHash in filtered_object_ids
+            ]
             json_object = {"entries": entries}
             if coll_manifests := self._coll_manifests:
                 res = coll_manifests.upsert(
