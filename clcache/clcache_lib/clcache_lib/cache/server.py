@@ -2,6 +2,7 @@ import errno
 import hashlib
 import logging
 import pickle
+from queue import Queue
 import select
 import subprocess as sp
 import sys
@@ -128,22 +129,24 @@ class PipeServer:
     def get_file_hashes(path_list: list[Path]) -> list[str]:
         """Get file hashes from clcache server."""
 
-        def read_from_pipe(pipe):
-            return pipe.read()
+        def read_from_pipe(pipe, result_queue):
+            result_queue.put(pipe.read())
 
         while True:
             try:
+                result_queue = Queue()
+
                 with open(PIPE_NAME, "w+b") as f:
                     f.write("\n".join(map(str, path_list)).encode("utf-8"))
                     f.write(b"\x00")
 
-                    read_thread = Thread(target=read_from_pipe, args=(f,))
+                    read_thread = Thread(target=read_from_pipe, args=(f, result_queue))
                     read_thread.start()
                     read_thread.join(HASH_SERVER_RESPONSE_TIMEOUT.seconds)
                     if read_thread.is_alive():
                         raise TimeoutError("No response from server")
 
-                    response = read_from_pipe(f)
+                    response = result_queue.get()
 
                     if response.startswith(b"!"):
                         # extract error string
