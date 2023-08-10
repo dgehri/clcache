@@ -8,6 +8,7 @@ import sys
 from collections.abc import Callable
 from ctypes import windll, wintypes
 from pathlib import Path
+from threading import Thread
 import pyuv
 from ..utils.logging import LogLevel, log
 from ..utils.named_mutex import NamedMutex
@@ -126,21 +127,23 @@ class PipeServer:
     @staticmethod
     def get_file_hashes(path_list: list[Path]) -> list[str]:
         """Get file hashes from clcache server."""
-        # Get wait timeout from config HASH_SERVER_RESPONSE_TIMEOUT variable
+
+        def read_from_pipe(pipe):
+            return pipe.read()
 
         while True:
             try:
                 with open(PIPE_NAME, "w+b") as f:
                     f.write("\n".join(map(str, path_list)).encode("utf-8"))
                     f.write(b"\x00")
-                    f.flush()
-                    ready, _, _ = select.select(
-                        [f], [], [], HASH_SERVER_RESPONSE_TIMEOUT.seconds
-                    )
-                    if ready:
-                        response = f.read()
-                    else:
+
+                    read_thread = Thread(target=read_from_pipe, args=(f,))
+                    read_thread.start()
+                    read_thread.join(HASH_SERVER_RESPONSE_TIMEOUT.seconds)
+                    if read_thread.is_alive():
                         raise TimeoutError("No response from server")
+
+                    response = read_from_pipe(f)
 
                     if response.startswith(b"!"):
                         # extract error string
