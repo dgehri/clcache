@@ -71,6 +71,7 @@ def log(msg: str, level: LogLevel = LogLevel.TRACE, force_flush: bool = False) -
 
             if level >= LogLevel.WARN:
                 from ..utils.win_evt_log import log_win_event
+
                 log_win_event(message, level)
 
             if force_flush:

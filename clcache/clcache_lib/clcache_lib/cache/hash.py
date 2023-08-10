@@ -14,12 +14,12 @@ HashAlgorithm = hashlib.md5
 
 
 def get_compiler_hash(compiler_path: Path) -> str:
-    '''
+    """
     Returns the hash of the given compiler executable.
 
-    The hash is based on the file modification time, file 
+    The hash is based on the file modification time, file
     size and the cache version.
-    '''
+    """
     stat = os.stat(compiler_path)
     data = "|".join(
         [
@@ -33,11 +33,11 @@ def get_compiler_hash(compiler_path: Path) -> str:
 
 
 def _get_sever_timeout_seconds() -> int | None:
-    '''
+    """
     Returns the timeout for the hash server in seconds.
 
     Returns None if the timeout is not set or invalid, or less than 1 minute.
-    '''
+    """
     # ignore exception if not a valid int
     try:
         if env_value := os.environ.get("CLCACHE_SERVER_TIMEOUT_MINUTES"):
@@ -50,7 +50,7 @@ def _get_sever_timeout_seconds() -> int | None:
 
 
 def get_file_hashes(path_list: list[Path]) -> list[str]:
-    '''
+    """
     Returns the hashes of the given files.
 
     Parameters:
@@ -58,16 +58,18 @@ def get_file_hashes(path_list: list[Path]) -> list[str]:
 
     Returns:
         The hashes of the files.
-    '''
-    if server_timeout_secs := _get_sever_timeout_seconds():
-        try:
-            return _get_file_hashes_from_server(server_timeout_secs, path_list)
-        except FileNotFoundError:
-            # This is expected
-            raise
-        except Exception as e:
-            log(f"Failed to use server: {traceback.format_exc()}",
-                LogLevel.ERROR)
+    """
+
+    # if CLCACHE_SERVER_DISABLE is set, don't use the server
+    if not os.environ.get("CLCACHE_SERVER_DISABLE"):
+        if server_timeout_secs := _get_sever_timeout_seconds():
+            try:
+                return _get_file_hashes_from_server(server_timeout_secs, path_list)
+            except FileNotFoundError:
+                # This is expected
+                raise
+            except Exception as e:
+                log(f"Failed to use server: {traceback.format_exc()}", LogLevel.ERROR)
 
     return [get_file_hash(path) for path in path_list]
 
@@ -90,8 +92,7 @@ def _get_file_hashes_from_server(server_timeout_secs, path_list):
             is_build_dir.append(False)
 
     other_hashes = PipeServer.get_file_hashes(other_paths)
-    build_dir_hashes = [get_file_hash(path)
-                        for path in build_dir_paths]
+    build_dir_hashes = [get_file_hash(path) for path in build_dir_paths]
 
     # Recombine hashes in original order
     hashes = []
@@ -105,7 +106,7 @@ def _get_file_hashes_from_server(server_timeout_secs, path_list):
 
 @functools.cache
 def get_file_hash(path: Path, toolset_data: str | None = None) -> str:
-    '''
+    """
     Returns the hash of the given file.
 
     Parameters:
@@ -114,7 +115,7 @@ def get_file_hash(path: Path, toolset_data: str | None = None) -> str:
 
     Returns:
         The hash of the file.
-    '''
+    """
 
     hasher = HashAlgorithm()
 
@@ -128,7 +129,7 @@ def get_file_hash(path: Path, toolset_data: str | None = None) -> str:
             # We need to replace those references with a placeholder to make the
             # hash independent of that information.
             src_dir = path.parent  # get containing folder of path
-            src_content = subst_basedir_with_placeholder(f.read(),  src_dir)
+            src_content = subst_basedir_with_placeholder(f.read(), src_dir)
             hasher.update(src_content)
 
     # log(f"File hash: {path.as_posix()} => {hasher.hexdigest()}", 2)

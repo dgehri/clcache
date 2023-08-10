@@ -2,26 +2,26 @@ import errno
 import hashlib
 import logging
 import pickle
+import select
 import subprocess as sp
 import sys
 from collections.abc import Callable
 from ctypes import windll, wintypes
 from pathlib import Path
-
 import pyuv
-
 from ..utils.logging import LogLevel, log
 from ..utils.named_mutex import NamedMutex
 from ..utils.ready_event import ReadyEvent
+from ..config.config import HASH_SERVER_RESPONSE_TIMEOUT
 
 # Not the same as VERSION !
 SERVER_VERSION = "2"
 
-UUID = fr'626763c0-bebe-11ed-a901-0800200c9a66-{SERVER_VERSION}'
-PIPE_NAME = fr'\\.\pipe\LOCAL\clcache-{UUID}'
-SINGLETON_NAME = fr"Local\singleton-{UUID}"
-LAUNCH_MUTEX = fr"Local\mutex-{UUID}"
-PIPE_READY_EVENT = fr"Local\ready-{UUID}"
+UUID = rf"626763c0-bebe-11ed-a901-0800200c9a66-{SERVER_VERSION}"
+PIPE_NAME = rf"\\.\pipe\LOCAL\clcache-{UUID}"
+SINGLETON_NAME = rf"Local\singleton-{UUID}"
+LAUNCH_MUTEX = rf"Local\mutex-{UUID}"
+PIPE_READY_EVENT = rf"Local\ready-{UUID}"
 
 
 BUFFER_SIZE = 65536
@@ -83,11 +83,13 @@ class HashCache:
 
 
 class Connection:
-    def __init__(self,
-                 pipe: pyuv.Pipe,  # type: ignore
-                 cache: HashCache,
-                 on_close_callback: Callable):
-        self._read_buf: bytes = b''
+    def __init__(
+        self,
+        pipe: pyuv.Pipe,  # type: ignore
+        cache: HashCache,
+        on_close_callback: Callable,
+    ):
+        self._read_buf: bytes = b""
         self._pipe = pipe
         self._cache = cache
         self._on_close_callback = on_close_callback
@@ -95,14 +97,14 @@ class Connection:
 
     def _on_client_read(self, pipe: pyuv.Pipe, data: bytes, error):  # type: ignore
         self._read_buf += data
-        if self._read_buf.endswith(b'\x00'):
-            paths = map(Path, self._read_buf[:-1].decode('utf-8').splitlines())
+        if self._read_buf.endswith(b"\x00"):
+            paths = map(Path, self._read_buf[:-1].decode("utf-8").splitlines())
             try:
                 hashes = map(self._cache.get_file_hash, paths)
-                response = '\n'.join(hashes).encode('utf-8')
+                response = "\n".join(hashes).encode("utf-8")
             except OSError as e:
-                response = b'!' + pickle.dumps(e)
-            pipe.write(response + b'\x00', self._on_write_done)
+                response = b"!" + pickle.dumps(e)
+            pipe.write(response + b"\x00", self._on_write_done)
 
     def _on_write_done(self, pipe, error):
         logging.debug("sent response to client, closing connection")
@@ -111,13 +113,11 @@ class Connection:
 
 
 class PipeServer:
-
     @staticmethod
     def is_running():
         handle = None
         try:
-            handle = windll.kernel32.OpenMutexW(
-                SYNCHRONIZE, False, SINGLETON_NAME)
+            handle = windll.kernel32.OpenMutexW(SYNCHRONIZE, False, SINGLETON_NAME)
             return handle != 0
         finally:
             if handle:
@@ -126,12 +126,22 @@ class PipeServer:
     @staticmethod
     def get_file_hashes(path_list: list[Path]) -> list[str]:
         """Get file hashes from clcache server."""
+        # Get wait timeout from config HASH_SERVER_RESPONSE_TIMEOUT variable
+
         while True:
             try:
                 with open(PIPE_NAME, "w+b") as f:
                     f.write("\n".join(map(str, path_list)).encode("utf-8"))
                     f.write(b"\x00")
-                    response = f.read()
+                    f.flush()
+                    ready, _, _ = select.select(
+                        [f], [], [], HASH_SERVER_RESPONSE_TIMEOUT.seconds
+                    )
+                    if ready:
+                        response = f.read()
+                    else:
+                        raise TimeoutError("No response from server")
+
                     if response.startswith(b"!"):
                         # extract error string
                         error = response[1:-1].decode("utf-8")
@@ -143,8 +153,7 @@ class PipeServer:
                     and windll.kernel32.GetLastError() == ERROR_PIPE_BUSY
                 ):
                     # All pipe instances are busy, wait until available
-                    windll.kernel32.WaitNamedPipeW(
-                        PIPE_NAME, NMPWAIT_WAIT_FOREVER)
+                    windll.kernel32.WaitNamedPipeW(PIPE_NAME, NMPWAIT_WAIT_FOREVER)
                 else:
                     raise
 
@@ -158,7 +167,6 @@ def spawn_server(server_idle_timeout_s: int, wait_time_s: int = 10):
 
     # avoid dobule spawning
     with NamedMutex(LAUNCH_MUTEX):
-
         # if the server is already running, return immediately
         if PipeServer.is_running():
             return True
@@ -167,24 +175,29 @@ def spawn_server(server_idle_timeout_s: int, wait_time_s: int = 10):
             args = []
             # Launch clcache_server.exe located in the same directory as this executable
             if "__compiled__" not in globals():
-                args.append(Path(sys.argv[0]).absolute().parent /
-                            "clcache_server/target/release/clcache_server.exe")
+                args.append(
+                    Path(sys.argv[0]).absolute().parent
+                    / "clcache_server/target/release/clcache_server.exe"
+                )
             else:
-                args.append(Path(sys.executable).parent.parent /
-                            "clcache_server.exe")
+                args.append(Path(sys.executable).parent.parent / "clcache_server.exe")
 
-            args.extend(
-                (f"--idle-timeout={server_idle_timeout_s}", f"--id={UUID}"))
+            args.extend((f"--idle-timeout={server_idle_timeout_s}", f"--id={UUID}"))
             try:
                 p = sp.Popen(
-                    args, creationflags=sp.CREATE_NEW_PROCESS_GROUP | sp.CREATE_NO_WINDOW)
-                success = p.pid != 0 and ready_event.wait(wait_time_s*1000)
+                    args,
+                    creationflags=sp.CREATE_NEW_PROCESS_GROUP | sp.CREATE_NO_WINDOW,
+                )
+                success = p.pid != 0 and ready_event.wait(wait_time_s * 1000)
                 if success:
                     log(
-                        f"Started hash server with timeout {server_idle_timeout_s} seconds")
+                        f"Started hash server with timeout {server_idle_timeout_s} seconds"
+                    )
                 else:
                     log(
-                        f"Failed to start hash server with parameters {args}", level=LogLevel.WARN)
+                        f"Failed to start hash server with parameters {args}",
+                        level=LogLevel.WARN,
+                    )
 
             except FileNotFoundError as e:
                 raise RuntimeError(

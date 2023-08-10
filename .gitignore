@@ -25,3 +25,4 @@ venv_py3.10/
 clcache_launcher/target/**
 clcache_server/target/**
 pyuv/**
+launch.json

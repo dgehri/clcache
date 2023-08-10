@@ -1,7 +1,7 @@
 from datetime import timedelta
 import os
 
-VERSION = "4.4.9-dgehri"
+VERSION = "4.4.10"
 CACHE_VERSION = "10"
 
 COUCHBASE_EXPIRATION = timedelta(days=3)
@@ -23,3 +23,6 @@ MAX_MANIFEST_HASHES = 100
 # Use of the cache server can be disabled entirely by setting the environment
 # variable CLCACHE_SERVER_TIMEOUT_MINUTES to 0.
 HASH_SERVER_TIMEOUT = timedelta(seconds=180)
+
+# Maximum time to wait for a response from the cache server
+HASH_SERVER_RESPONSE_TIMEOUT = timedelta(seconds=15)

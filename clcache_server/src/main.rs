@@ -1,5 +1,6 @@
 use anyhow::Result;
 use clap::Parser;
+use event::signal_event;
 use log::{debug, error, info};
 use single_instance::SingleInstance;
 use std::path::PathBuf;
@@ -10,11 +11,8 @@ use tokio::io::{self, AsyncReadExt, AsyncWriteExt};
 use tokio::net::windows::named_pipe::{NamedPipeServer, ServerOptions};
 use tokio::sync::mpsc;
 use tokio::time::{interval_at, Instant};
-
 mod event;
 mod hash_cache;
-
-use event::signal_event;
 
 /// Lightweight server to calculate MD5 hashes of files.
 #[derive(Parser, Debug)]
@@ -98,7 +96,7 @@ async fn main() -> io::Result<()> {
             server.connect().await?;
 
             // Copy the connected server to a new variable so that it can be moved into the task.
-            let connected_server = server;
+            let mut connected_server = server;
 
             // Create a new server to handle the next connection.
             server = ServerOptions::new().create(&pipe_name)?;
@@ -110,7 +108,9 @@ async fn main() -> io::Result<()> {
             let cache_clone = Arc::clone(&cache);
 
             tokio::spawn(async move {
-                if let Err(e) = handle_client(cache_clone, connected_server, exit_tx).await {
+                if let Err(e) = handle_client(cache_clone, &mut connected_server, exit_tx).await {
+                    // Handle disconnection if an error occurs in handle_client
+                    let _ = connected_server.disconnect();
                     error!("Error in handle_client: {}", e);
                 }
 
@@ -151,38 +151,51 @@ async fn main() -> io::Result<()> {
 /// Handles a client connection.
 async fn handle_client(
     cache: Arc<hash_cache::HashCache>,
-    mut client: NamedPipeServer,
+    client: &mut NamedPipeServer,
     exit_tx: mpsc::Sender<()>,
 ) -> Result<()> {
-    // Read available data from the client, chunk by chunk, until we reach a zero byte.
+    const PIPE_TIMEOUT: Duration = Duration::from_secs(5);
+
     let mut read_buf = Vec::new();
     loop {
-        let mut buf = vec![0; 1024];
-        let read_len = client.read(&mut buf).await?;
-        if read_len == 0 {
-            // Client disconnected.
-            return Ok(());
-        }
+        let mut buf = vec![0; 4096];
 
-        // If the last byte is zero, then we have reached the end of the message.
-        if buf[read_len - 1] == 0 {
-            read_buf.extend(&buf[..read_len]);
-            break;
-        }
+        match tokio::time::timeout(PIPE_TIMEOUT, client.read(&mut buf)).await {
+            Ok(Ok(read_len)) => {
+                if read_len == 0 {
+                    // Client disconnected.
+                    return Ok(());
+                }
 
-        read_buf.extend(&buf[..read_len]);
+                // If the last byte is zero, then we have reached the end of the message.
+                if buf[read_len - 1] == 0 {
+                    read_buf.extend(&buf[..read_len]);
+                    break;
+                }
+
+                read_buf.extend(&buf[..read_len]);
+            }
+            Ok(Err(e)) => {
+                // Client disconnected.
+                return Err(e.into());
+            }
+            Err(_) => {
+                // Timeout.
+                return Err(
+                    io::Error::new(io::ErrorKind::TimedOut, "Client read timed out").into(),
+                );
+            }
+        }
     }
 
     // If message starts with "*", then it's a command.
-    if read_buf[0] == b'*' {
+    let response = if read_buf[0] == b'*' {
         let command = String::from_utf8(read_buf[1..read_buf.len() - 1].to_vec())?;
         match command.as_str() {
             "clear" => {
                 // Reset the cache.
                 cache.clear().await;
-
-                // Echo the command back to the client.
-                client.write_all(b"*ok\n").await?;
+                Some(b"*ok\n".to_vec())
             }
             "exit" => {
                 // Echo the command back to the client.
@@ -190,10 +203,11 @@ async fn handle_client(
 
                 // Terminate the server.
                 exit_tx.send(()).await.unwrap();
+                None
             }
             _ => {
                 // Unknown command.
-                client.write_all(b"Unknown command").await?;
+                Some(b"Unknown command\n\0".to_vec())
             }
         }
     } else {
@@ -202,7 +216,7 @@ async fn handle_client(
         // - otherwise, set WatchBehavior to MonitorForChanges
         let paths: Vec<_> = String::from_utf8(read_buf[..read_buf.len() - 1].to_vec())?
             .lines()
-            .map(|path: &str| PathBuf::from(path))
+            .map(PathBuf::from)
             .collect();
 
         // request all hashes
@@ -216,10 +230,8 @@ async fn handle_client(
                     response.extend(hash.as_bytes());
                     response.push(b'\n');
                 }
-
                 response.push(b'\0');
-
-                client.write_all(&response).await?;
+                Some(response)
             }
             Err(e) => {
                 // Write the error response.
@@ -227,10 +239,27 @@ async fn handle_client(
                 response.push(b'!'); // Error indicator
                 response.extend(e.to_string().as_bytes());
                 response.push(b'\0');
-
-                client.write_all(&response).await?;
+                Some(response)
             }
-        };
+        }
+    };
+
+    if let Some(response) = response {
+        let result = tokio::time::timeout(PIPE_TIMEOUT, client.write_all(&response)).await;
+        match result {
+            Ok(Ok(_)) => {}
+            Ok(Err(e)) => {
+                // Client disconnected.
+                return Err(e.into());
+            }
+            Err(_) => {
+                // Timeout.
+                return Err(
+                    io::Error::new(io::ErrorKind::TimedOut, "Client write timed out").into(),
+                );
+            }
+        }
+        client.flush().await?;
     }
 
     Ok(())
