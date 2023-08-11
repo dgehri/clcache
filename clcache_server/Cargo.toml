@@ -1,6 +1,6 @@
 [package]
 name = "clcache_server"
-version = "4.4.10"
+version = "4.4.12"
 edition = "2021"
 authors = ["Daniel Gehriger <dgehriger@globusmedical.com>"]
 
@@ -22,3 +22,4 @@ log = "0.4"
 env_logger = "0.10.0"
 tempfile = "3.5.0"
 rand = "0.8"
+chrono = "0.4"

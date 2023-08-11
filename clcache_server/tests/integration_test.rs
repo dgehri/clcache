@@ -1,7 +1,8 @@
-use std::{collections::HashMap, path::PathBuf, str::FromStr, time::Duration};
-
+use anyhow::Result;
 use log::{error, info, trace};
+use std::path::Path;
 use std::sync::Once;
+use std::{collections::HashMap, path::PathBuf, str::FromStr, time::Duration};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::windows::named_pipe::{ClientOptions, NamedPipeClient},
@@ -12,23 +13,59 @@ use winapi::shared::winerror::ERROR_PIPE_BUSY;
 
 static INIT: Once = Once::new();
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 16)]
 async fn test_server() {
     INIT.call_once(|| {
         env_logger::builder()
             .filter_module("integration_test", log::LevelFilter::Trace)
-            .format_timestamp_millis()
+            .format(|buf, record| {
+                use std::io::Write;
+                writeln!(
+                    buf,
+                    "[{},{:?}] [{}] - {}",
+                    chrono::Local::now().format("%Y-%m-%d %H:%M:%S%.3f"),
+                    std::thread::current().id(),
+                    record.level(),
+                    record.args()
+                )
+            })
             .is_test(true)
             .try_init()
             .unwrap();
     });
 
+    // get project folder
+    let project_folder = std::env::current_dir().unwrap();
+
+    let pipe_name = init_server(&project_folder).unwrap();
+
+    // quickly spawn 100 clients to test the server's ability to handle multiple clients
+    let mut handles = Vec::new();
+    for _ in 0..100 {
+        let pipe_name = pipe_name.clone();
+        let project_folder = project_folder.clone();
+        handles.push(tokio::spawn(async move {
+            run_client_test(&pipe_name, &project_folder).await;
+        }));
+    }
+
+    // wait for all clients to finish
+    for handle in handles {
+        handle.await.unwrap();
+    }
+
+    // Terminate server (don't wait for response)
+    info!("Terminating server...");
+    let mut client = connect_to_server(&pipe_name).await;
+    client.write_all(b"*exit\0").await.unwrap();
+    let mut response = Vec::new();
+    client.read_to_end(&mut response).await.unwrap();
+}
+
+fn init_server(project_folder: &Path) -> Result<String> {
     let server_id = uuid::Uuid::new_v4().to_string();
     let pipe_name = format!(r"\\.\pipe\\LOCAL\\clcache-{}", server_id);
     let event_name = std::ffi::CString::new(format!(r"Local\ready-{}", server_id)).unwrap();
-
-    // get project folder
-    let project_folder = std::env::current_dir().unwrap();
 
     // combine with clcache_server.exe path
     #[cfg(debug_assertions)]
@@ -60,6 +97,10 @@ async fn test_server() {
         info!("Server started in {} ms", now.elapsed().as_millis());
     }
 
+    Ok(pipe_name)
+}
+
+async fn run_client_test(pipe_name: &str, project_folder: &Path) {
     // map of expected file names and their hashes
     let test_files = vec![
         ("1/qjsonrpcservice.h", "1e69f8ad0d5e16cad26ab3bb454cf841"),
@@ -147,25 +188,23 @@ async fn test_server() {
 
     // ensure that the hash has not changed
     assert_eq!(hash2, hash3);
-
-    // Terminate server (don't wait for response)
-    info!("Terminating server...");
-    let mut client = connect_to_server(&pipe_name).await;
-    client.write_all(b"*exit\0").await.unwrap();
-    let mut response = Vec::new();
-    client.read_to_end(&mut response).await.unwrap();
 }
 
 async fn connect_to_server(pipe_name: &str) -> NamedPipeClient {
-    loop {
-        match ClientOptions::new().open(&pipe_name) {
+    info!("Connecting to server...");
+    let client = loop {
+        match ClientOptions::new().open(pipe_name) {
             Ok(client) => break client,
             Err(e) if e.raw_os_error() == Some(ERROR_PIPE_BUSY as i32) => (),
             Err(e) => panic!("Failed to connect to server: {:?}", e),
         }
 
+        info!("Waiting for server to become available...");
         time::sleep(Duration::from_millis(50)).await;
-    }
+        info!("Retrying...")
+    };
+    info!("Connected to server");
+    client
 }
 
 async fn get_file_hashes(pipe_name: &str, files: &Vec<PathBuf>) -> HashMap<PathBuf, String> {

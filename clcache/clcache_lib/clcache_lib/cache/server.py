@@ -1,6 +1,8 @@
+import datetime
 import errno
 import hashlib
 import logging
+import os
 import pickle
 from queue import Queue
 import select
@@ -128,14 +130,19 @@ class PipeServer:
     @staticmethod
     def get_file_hashes(path_list: list[Path]) -> list[str]:
         """Get file hashes from clcache server."""
+        log("Entering get_file_hashes", force_flush=True)
 
         def read_from_pipe(pipe, result_queue):
+            log("Reading from pipe", force_flush=True)
             result_queue.put(pipe.read())
+            log("Read from pipe", force_flush=True)
 
-        while True:
+        result_queue = Queue()
+
+        start = datetime.datetime.now()
+        while datetime.datetime.now() - start < HASH_SERVER_RESPONSE_TIMEOUT:
             try:
-                result_queue = Queue()
-
+                log("Opening pipe", force_flush=True)
                 with open(PIPE_NAME, "w+b") as f:
                     f.write("\n".join(map(str, path_list)).encode("utf-8"))
                     f.write(b"\x00")
@@ -152,24 +159,33 @@ class PipeServer:
                         # extract error string
                         error = response[1:-1].decode("utf-8")
                         raise FileNotFoundError(error)
+
                     return response[:-1].decode("utf-8").splitlines()
             except OSError as e:
                 if (
                     e.errno == errno.EINVAL
                     and windll.kernel32.GetLastError() == ERROR_PIPE_BUSY
                 ):
-                    # All pipe instances are busy, wait until available
-                    windll.kernel32.WaitNamedPipeW(PIPE_NAME, NMPWAIT_WAIT_FOREVER)
+                    log("Pipe busy, waiting", force_flush=True)
+                    windll.kernel32.WaitNamedPipeW(PIPE_NAME, 100)
+                    log("Retrying...", force_flush=True)
                 else:
                     raise
 
+        log("Timed out waiting for server", force_flush=True)
+        raise TimeoutError("No response from server")
+
 
 def spawn_server(server_idle_timeout_s: int, wait_time_s: int = 10):
+    log("Entering spawn_server")
     # sourcery skip: extract-method
 
     # if the server is already running, return immediately
     if PipeServer.is_running():
+        log("Server already running")
         return True
+
+    log("Spawning clcache server")
 
     # avoid dobule spawning
     with NamedMutex(LAUNCH_MUTEX):

@@ -93,13 +93,22 @@ async fn main() -> io::Result<()> {
 
         loop {
             // Wait for a client to connect.
+            info!("Waiting for client to connect...");
             server.connect().await?;
+            info!("Client connected.");
 
             // Copy the connected server to a new variable so that it can be moved into the task.
             let mut connected_server = server;
 
             // Create a new server to handle the next connection.
-            server = ServerOptions::new().create(&pipe_name)?;
+            info!("Creating new server...");
+            server = match ServerOptions::new().create(&pipe_name) {
+                Ok(s) => s,
+                Err(e) => {
+                    error!("Error creating new server: {}", e);
+                    return Ok::<(), io::Error>(());
+                }
+            };            
 
             // Reset the idle timer.
             reset_idle_timer_tx.send(()).await.ok();
@@ -274,29 +283,27 @@ mod tests {
         count: usize,
         result: &mut Vec<PathBuf>,
     ) -> std::io::Result<()> {
-        let mut entries = std::fs::read_dir(root_dir)?;
-        while let Some(entry) = entries.next() {
-            if let Ok(entry) = entry {
-                let path = entry.path();
-                if path.is_dir() {
-                    get_test_files(&path, count, result).ok();
-                } else {
-                    // skip if less than 1MB and more than 20 MB
-                    let metadata = std::fs::metadata(&path)?;
-                    if metadata.len() < 100 * 1024 || metadata.len() > 1 * 1024 * 1024 {
-                        continue;
-                    }
-
-                    // skip if no read access
-                    if std::fs::File::open(&path).is_err() {
-                        continue;
-                    }
-
-                    result.push(path);
+        let entries = std::fs::read_dir(root_dir)?;
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                get_test_files(&path, count, result).ok();
+            } else {
+                // skip if less than 1MB and more than 20 MB
+                let metadata = std::fs::metadata(&path)?;
+                if metadata.len() < 100 * 1024 || metadata.len() > 1024 * 1024 {
+                    continue;
                 }
-                if result.len() >= count as usize {
-                    break;
+
+                // skip if no read access
+                if std::fs::File::open(&path).is_err() {
+                    continue;
                 }
+
+                result.push(path);
+            }
+            if result.len() >= count {
+                break;
             }
         }
 
