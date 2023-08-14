@@ -1,18 +1,30 @@
 use anyhow::Result;
 use clap::Parser;
 use event::signal_event;
+use futures::stream::StreamExt;
 use log::{debug, error, info};
 use single_instance::SingleInstance;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use std::u8;
-use tokio::io::{self, AsyncReadExt, AsyncWriteExt};
-use tokio::net::windows::named_pipe::{NamedPipeServer, ServerOptions};
+use tokio::io;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::windows::named_pipe::{ClientOptions, NamedPipeServer, ServerOptions};
 use tokio::sync::mpsc;
-use tokio::time::{interval_at, Instant};
+use tokio::time::{self, interval_at, Instant};
+use tokio_util::codec::{FramedRead, LinesCodec};
+use util::create_process;
+use util::to_wide_cstring;
+use winapi::shared::winerror::ERROR_PIPE_BUSY;
+use winapi::um::handleapi::CloseHandle;
+use winapi::um::synchapi::{CreateEventW, CreateMutexW, OpenMutexW, WaitForSingleObject};
+use winapi::um::winbase::{INFINITE, WAIT_OBJECT_0};
+use winapi::um::winnt::SYNCHRONIZE;
+
 mod event;
 mod hash_cache;
+mod util;
 
 /// Lightweight server to calculate MD5 hashes of files.
 #[derive(Parser, Debug)]
@@ -29,6 +41,10 @@ struct Args {
         default_value = "626763c0-bebe-11ed-a901-0800200c9a66-2"
     )]
     id: String,
+
+    /// Act as client and return hashes for paths given on stdin
+    #[arg(long = "client-mode", required = false, default_value = "false")]
+    client_mode: bool,
 
     /// Set verbosity level (repeat for more verbose output)
     #[arg(long = "verbose", short = 'v', action = clap::ArgAction::Count)]
@@ -57,14 +73,23 @@ async fn main() -> io::Result<()> {
     let pipe_name = format!(r"\\.\pipe\\LOCAL\\clcache-{}", server_id);
     let server_ready_event = format!(r"Local\ready-{}", server_id);
     let singleton_name = format!(r"Local\singleton-{}", server_id);
+    let timeout = Duration::from_secs(args.timeout);
 
-    let instance = SingleInstance::new(&singleton_name).unwrap();
+    if args.client_mode {
+        return get_hashes_as_client(server_id, &singleton_name, &pipe_name, &timeout).await;
+    }
+
+    let instance = SingleInstance::new(&singleton_name).map_err(|e| {
+        io::Error::new(
+            io::ErrorKind::Other,
+            format!("Error creating single instance: {}", e),
+        )
+    })?;
+
     if !instance.is_single() {
         info!("Another instance is already running.");
         return Ok(());
     }
-
-    let timeout = Duration::from_secs(args.timeout);
 
     // Create the hash cache.
     let cache = Arc::new(hash_cache::HashCache::new());
@@ -108,7 +133,7 @@ async fn main() -> io::Result<()> {
                     error!("Error creating new server: {}", e);
                     return Ok::<(), io::Error>(());
                 }
-            };            
+            };
 
             // Reset the idle timer.
             reset_idle_timer_tx.send(()).await.ok();
@@ -272,6 +297,156 @@ async fn handle_client(
     }
 
     Ok(())
+}
+
+async fn get_hashes_as_client(
+    server_id: &str,
+    singleton_name: &str,
+    pipe_name: &str,
+    server_idle_timeout: &Duration,
+) -> io::Result<()> {
+    // read hashes from stdin (read until empty line)
+    let stdin = io::stdin();
+    let mut reader = FramedRead::new(stdin, LinesCodec::new());
+    let mut path_list = Vec::new();
+    while let Some(line_result) = reader.next().await {
+        match line_result {
+            Ok(line) => {
+                if line.is_empty() {
+                    break;
+                }
+
+                // remove trailing whitespace / newlines
+                let line = line.trim_end();
+                path_list.push(line.to_string());
+            }
+            Err(e) => {
+                eprintln!("Error reading line: {}", e);
+            }
+        }
+    }
+
+    // spawn server if needed
+    spawn_server(server_id, singleton_name, server_idle_timeout).await?;
+
+    let mut client = loop {
+        match ClientOptions::new().open(pipe_name) {
+            Ok(client) => break client,
+            Err(e) if e.raw_os_error() == Some(ERROR_PIPE_BUSY as i32) => (),
+            Err(e) => return Err(e),
+        }
+
+        time::sleep(Duration::from_millis(50)).await;
+    };
+
+    let mut message = path_list
+        .into_iter()
+        .collect::<Vec<_>>()
+        .join("\n")
+        .into_bytes();
+
+    message.push(b'\0');
+    client.write_all(&message).await?;
+
+    // Read the response
+    let mut response = Vec::new();
+    client.read_to_end(&mut response).await?;
+
+    // Print to stdout if the response is not empty
+    print!(
+        "{}",
+        String::from_utf8_lossy(&response[..response.len() - 1])
+    );
+    Ok(())
+}
+
+/// Function to spawn the server.
+pub async fn spawn_server(
+    server_id: &str,
+    singleton_name: &str,
+    server_idle_timeout: &Duration,
+) -> io::Result<()> {
+    // Check if the server is already running
+    if is_server_running(singleton_name)? {
+        log::debug!("Server already running");
+        return Ok(());
+    }
+
+    // Avoid double spawning using a named mutex
+    let launch_mutex_name = format!("Local\\mutex-{}", server_id);
+    let wide_string = to_wide_cstring(&launch_mutex_name)?;
+
+    let mutex = unsafe { CreateMutexW(std::ptr::null_mut(), 1, wide_string.as_ptr()) };
+    if mutex.is_null() {
+        return Err(io::Error::last_os_error());
+    }
+
+    let wait_result = unsafe { WaitForSingleObject(mutex, INFINITE) };
+    if wait_result != 0 {
+        return Err(io::Error::last_os_error());
+    }
+
+    // Check again if the server is running after acquiring the mutex
+    if is_server_running(singleton_name)? {
+        return Ok(());
+    }
+
+    // Get the current executable's path
+    let current_exe_path = std::env::current_exe().expect("Failed to get current exe path");
+
+    // Launch the server with the required parameters
+    let command_line = format!(
+        "{} --idle-timeout={} --id={} -v -v -v -v",
+        current_exe_path.to_string_lossy(),
+        server_idle_timeout.as_secs(),
+        server_id
+    );
+    create_process(&current_exe_path, &command_line)?;
+
+    // Wait for the server to signal that it's ready
+    let wait_duration = Duration::from_secs(10);
+    let pipe_ready_event_name = format!("Local\\ready-{}", server_id);
+    wait_for_ready_event(&pipe_ready_event_name, &wait_duration).await?;
+    log::debug!(
+        "Started hash server with timeout {} seconds",
+        server_idle_timeout.as_secs()
+    );
+    Ok(())
+}
+
+async fn wait_for_ready_event(
+    pipe_ready_event_name: &str,
+    wait_duration: &Duration,
+) -> io::Result<()> {
+    let wide_string = to_wide_cstring(pipe_ready_event_name)?;
+    let handle = unsafe { CreateEventW(std::ptr::null_mut(), 0, 0, wide_string.as_ptr()) };
+
+    if handle.is_null() {
+        return Err(io::Error::last_os_error());
+    }
+
+    let wait_result = unsafe { WaitForSingleObject(handle, wait_duration.as_millis() as u32) };
+    unsafe { winapi::um::handleapi::CloseHandle(handle) };
+
+    match wait_result == WAIT_OBJECT_0 {
+        true => Ok(()),
+        false => Err(io::Error::new(
+            io::ErrorKind::TimedOut,
+            "Failed to start hash server",
+        )),
+    }
+}
+
+fn is_server_running(singleton_name: &str) -> io::Result<bool> {
+    let wide_string = to_wide_cstring(singleton_name)?;
+    let handle = unsafe { OpenMutexW(SYNCHRONIZE, 0, wide_string.as_ptr()) };
+
+    if handle.is_null() {
+        Ok(false)
+    } else {
+        unsafe { CloseHandle(handle) };
+        Ok(true)
+    }
 }
 
 #[cfg(test)]

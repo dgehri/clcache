@@ -75,9 +75,6 @@ def get_file_hashes(path_list: list[Path]) -> list[str]:
 
 
 def _get_file_hashes_from_server(server_timeout_secs, path_list):
-    if not spawn_server(server_timeout_secs):
-        raise OSError("Server didn't start in time")
-
     # Split path_list into paths in build dir and paths not in build dir,
     # and remember original index into original list
     build_dir_paths = []
@@ -91,7 +88,7 @@ def _get_file_hashes_from_server(server_timeout_secs, path_list):
             other_paths.append(path)
             is_build_dir.append(False)
 
-    other_hashes = PipeServer.get_file_hashes(other_paths)
+    other_hashes = PipeServer.get_file_hashes(other_paths, server_timeout_secs)
     build_dir_hashes = [get_file_hash(path) for path in build_dir_paths]
 
     # Recombine hashes in original order

@@ -1,3 +1,4 @@
+import ctypes
 import datetime
 import errno
 import hashlib
@@ -9,7 +10,7 @@ import select
 import subprocess as sp
 import sys
 from collections.abc import Callable
-from ctypes import windll, wintypes
+from ctypes import byref, windll, wintypes
 from pathlib import Path
 from threading import Thread
 import pyuv
@@ -86,36 +87,6 @@ class HashCache:
             ev.stop()
 
 
-class Connection:
-    def __init__(
-        self,
-        pipe: pyuv.Pipe,  # type: ignore
-        cache: HashCache,
-        on_close_callback: Callable,
-    ):
-        self._read_buf: bytes = b""
-        self._pipe = pipe
-        self._cache = cache
-        self._on_close_callback = on_close_callback
-        pipe.start_read(self._on_client_read)
-
-    def _on_client_read(self, pipe: pyuv.Pipe, data: bytes, error):  # type: ignore
-        self._read_buf += data
-        if self._read_buf.endswith(b"\x00"):
-            paths = map(Path, self._read_buf[:-1].decode("utf-8").splitlines())
-            try:
-                hashes = map(self._cache.get_file_hash, paths)
-                response = "\n".join(hashes).encode("utf-8")
-            except OSError as e:
-                response = b"!" + pickle.dumps(e)
-            pipe.write(response + b"\x00", self._on_write_done)
-
-    def _on_write_done(self, pipe, error):
-        logging.debug("sent response to client, closing connection")
-        self._pipe.close()
-        self._on_close_callback(self)
-
-
 class PipeServer:
     @staticmethod
     def is_running():
@@ -128,52 +99,46 @@ class PipeServer:
                 windll.kernel32.CloseHandle(handle)
 
     @staticmethod
-    def get_file_hashes(path_list: list[Path]) -> list[str]:
+    def get_file_hashes(path_list: list[Path], server_idle_timeout_s) -> list[str]:
         """Get file hashes from clcache server."""
-        log("Entering get_file_hashes", force_flush=True)
 
-        def read_from_pipe(pipe, result_queue):
-            log("Reading from pipe", force_flush=True)
-            result_queue.put(pipe.read())
-            log("Read from pipe", force_flush=True)
+        # Launch clcache_server.exe located in the same directory as this executable
+        args = []
+        if "__compiled__" not in globals():
+            args.append(
+                Path(sys.argv[0]).absolute().parent
+                / "clcache_server/target/release/clcache_server.exe"
+            )
+        else:
+            args.append(Path(sys.executable).parent.parent / "clcache_server.exe")
 
-        result_queue = Queue()
+        args.extend((f"--idle-timeout={server_idle_timeout_s}", f"--id={UUID}"))
+        args.extend("--get-hashes")
 
-        start = datetime.datetime.now()
-        while datetime.datetime.now() - start < HASH_SERVER_RESPONSE_TIMEOUT:
-            try:
-                log("Opening pipe", force_flush=True)
-                with open(PIPE_NAME, "w+b") as f:
-                    f.write("\n".join(map(str, path_list)).encode("utf-8"))
-                    f.write(b"\x00")
+        p = sp.Popen(
+            args,
+            creationflags=sp.CREATE_NO_WINDOW,
+        )
 
-                    read_thread = Thread(target=read_from_pipe, args=(f, result_queue))
-                    read_thread.start()
-                    read_thread.join(HASH_SERVER_RESPONSE_TIMEOUT.seconds)
-                    if read_thread.is_alive():
-                        raise TimeoutError("No response from server")
+        # Write paths to stdin (separated by newline, and a final empty line)
+        stdin_data = "\n".join(map(str, path_list)) + "\n\n"
 
-                    response = result_queue.get()
+        # Wait for process to finish and get output
+        stdout, stderr = p.communicate(
+            input=stdin_data.encode("utf-8"), timeout=server_idle_timeout_s
+        )
+        if p.returncode != 0:
+            raise RuntimeError(f"Process exited with code {p.returncode}")
 
-                    if response.startswith(b"!"):
-                        # extract error string
-                        error = response[1:-1].decode("utf-8")
-                        raise FileNotFoundError(error)
+        # Read result from stdout
+        response = stdout.decode("utf-8")
 
-                    return response[:-1].decode("utf-8").splitlines()
-            except OSError as e:
-                if (
-                    e.errno == errno.EINVAL
-                    and windll.kernel32.GetLastError() == ERROR_PIPE_BUSY
-                ):
-                    log("Pipe busy, waiting", force_flush=True)
-                    windll.kernel32.WaitNamedPipeW(PIPE_NAME, 100)
-                    log("Retrying...", force_flush=True)
-                else:
-                    raise
+        if response.startswith("!"):
+            # extract error string
+            error = response[1:-1]
+            raise FileNotFoundError(error)
 
-        log("Timed out waiting for server", force_flush=True)
-        raise TimeoutError("No response from server")
+        return response[:-1].splitlines()
 
 
 def spawn_server(server_idle_timeout_s: int, wait_time_s: int = 10):
@@ -187,7 +152,7 @@ def spawn_server(server_idle_timeout_s: int, wait_time_s: int = 10):
 
     log("Spawning clcache server")
 
-    # avoid dobule spawning
+    # avoid double spawning
     with NamedMutex(LAUNCH_MUTEX):
         # if the server is already running, return immediately
         if PipeServer.is_running():
