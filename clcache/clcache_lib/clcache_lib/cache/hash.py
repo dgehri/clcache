@@ -1,16 +1,21 @@
 import functools
 import hashlib
+import itertools
 import os
+import sys
 import traceback
 from pathlib import Path
-
-from ..cache.server import PipeServer, spawn_server
+import subprocess as sp
 from ..config import CACHE_VERSION
 from ..config.config import HASH_SERVER_TIMEOUT
 from ..utils.logging import LogLevel, log
 from .virt import is_in_build_dir, subst_basedir_with_placeholder
 
 HashAlgorithm = hashlib.md5
+
+# Not the same as VERSION !
+SERVER_VERSION = "3"
+UUID = rf"626763c0-bebe-11ed-a901-0800200c9a66-{SERVER_VERSION}"
 
 
 def get_compiler_hash(compiler_path: Path) -> str:
@@ -62,9 +67,9 @@ def get_file_hashes(path_list: list[Path]) -> list[str]:
 
     # if CLCACHE_SERVER_DISABLE is set, don't use the server
     if not os.environ.get("CLCACHE_SERVER_DISABLE"):
-        if server_timeout_secs := _get_sever_timeout_seconds():
+        if server_idle_timeout_s := _get_sever_timeout_seconds():
             try:
-                return _get_file_hashes_from_server(server_timeout_secs, path_list)
+                return _get_file_hashes_from_server(path_list, server_idle_timeout_s)
             except FileNotFoundError:
                 # This is expected
                 raise
@@ -74,31 +79,71 @@ def get_file_hashes(path_list: list[Path]) -> list[str]:
     return [get_file_hash(path) for path in path_list]
 
 
-def _get_file_hashes_from_server(server_timeout_secs, path_list):
-    # Split path_list into paths in build dir and paths not in build dir,
-    # and remember original index into original list
-    build_dir_paths = []
-    other_paths = []
-    is_build_dir = []
-    for path in path_list:
-        if is_in_build_dir(path):
-            build_dir_paths.append(path)
-            is_build_dir.append(True)
-        else:
-            other_paths.append(path)
-            is_build_dir.append(False)
+def _get_file_hashes_from_server(
+    path_list: list[Path], server_idle_timeout_s: int
+) -> list[str]:
+    # Categorize paths based on their location (build dir or not)
+    categorized_paths = [(path, is_in_build_dir(path)) for path in path_list]
 
-    other_hashes = PipeServer.get_file_hashes(other_paths, server_timeout_secs)
+    build_dir_paths = [path for path, in_build_dir in categorized_paths if in_build_dir]
+    other_paths = [path for path, in_build_dir in categorized_paths if not in_build_dir]
+
+    # Fetch hashes based on location
+    other_hashes = _get_file_hashes_from_server_impl(other_paths, server_idle_timeout_s)
     build_dir_hashes = [get_file_hash(path) for path in build_dir_paths]
 
-    # Recombine hashes in original order
-    hashes = []
-    for i in range(len(path_list)):
-        if is_build_dir[i]:
-            hashes.append(build_dir_hashes.pop(0))
-        else:
-            hashes.append(other_hashes.pop(0))
-    return hashes
+    return list(
+        itertools.chain.from_iterable(
+            (build_dir_hashes if in_build_dir else other_hashes)
+            for _, in_build_dir in categorized_paths
+        )
+    )
+
+
+def _get_file_hashes_from_server_impl(
+    path_list: list[Path], server_idle_timeout_s: int
+) -> list[str]:
+    """Get file hashes from clcache server."""
+
+    # Launch clcache_server.exe located in the same directory as this executable
+    args = []
+    if "__compiled__" not in globals():
+        args.append(
+            Path(sys.argv[0]).absolute().parent
+            / "clcache_server/target/release/clcache_server.exe"
+        )
+    else:
+        args.append(Path(sys.executable).parent.parent / "clcache_server.exe")
+
+    args.extend(
+        (f"--idle-timeout={server_idle_timeout_s}", f"--id={UUID}", "--client-mode")
+    )
+
+    with sp.Popen(
+        args,
+        creationflags=sp.CREATE_NO_WINDOW,
+        stdin=sp.PIPE,
+        stdout=sp.PIPE,
+        stderr=sp.PIPE,
+    ) as p:
+        # Write paths to stdin (separated by newline, and a final empty line)
+        stdin_data = "\n".join(map(str, path_list)) + "\n\n"
+
+        # Wait for process to finish and get output
+        stdout, stderr = p.communicate(
+            input=stdin_data.encode("utf-8"), timeout=server_idle_timeout_s
+        )
+        if p.returncode != 0:
+            raise RuntimeError(f"Process exited with code {p.returncode}")
+
+    # Read result from stdout
+    response = stdout.decode("utf-8")
+
+    if response.startswith("!"):
+        # extract error string
+        raise FileNotFoundError(response[1:-1])
+
+    return response[:-1].splitlines()
 
 
 @functools.cache
