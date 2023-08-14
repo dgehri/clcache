@@ -10,7 +10,7 @@ class ClcacheConan(ConanFile):
     url = "https://github.com/dgehri/clcache"
     license = "https://github.com/dgehri/clcache/blob/master/LICENSE"
     user = "dgehri"
-    channel = "dev"
+    channel = "stable"
 
     def package(self):
         # Copy clcache.exe to bin and rename to moccache.exe

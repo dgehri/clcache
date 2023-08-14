@@ -396,7 +396,7 @@ pub async fn spawn_server(
 
     // Launch the server with the required parameters
     let command_line = format!(
-        "{} --idle-timeout={} --id={} -v -v -v -v",
+        "{} --idle-timeout={} --id={}",
         current_exe_path.to_string_lossy(),
         server_idle_timeout.as_secs(),
         server_id
