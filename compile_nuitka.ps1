@@ -8,7 +8,6 @@ $MainFunction = {
     # Ask your user if upload is desired
     $upload = Read-Host "Upload $name/$version@$user/$channel to globus-conan-local? (y/n)"
 
-    & venv_py3.10\Scripts\Activate.ps1
     $env:PATH = "C:\Program Files\Conan\conan;" + $env:PATH
 
     Push-Location clcache\clcache_lib
@@ -17,11 +16,11 @@ $MainFunction = {
     Pop-Location
 
     # Print Nuitka version to stdout, prefixed with "Nuitka version: "
-    $nuitkaVersion = python -m nuitka --version
+    $env:PIPENV_PIPFILE = "clcache\Pipfile"
+    $nuitkaVersion = pipenv run python -m nuitka --version
     Write-Output "Nuitka version: $nuitkaVersion"
 
-    python -m nuitka --standalone --include-package=pyuv --plugin-enable=pylint-warnings --python-flag="-O" --mingw64 .\clcache
-    # python -m nuitka --standalone --include-package=pyuv --plugin-enable=pylint-warnings --python-flag="-O" --clang .\clcache
+    pipenv run python -m nuitka --standalone --plugin-enable=pylint-warnings --python-flag="-O" --mingw64 .\clcache
 
     Push-Location conan
     $env:CONAN_REVISIONS_ENABLED = 1
@@ -32,6 +31,8 @@ $MainFunction = {
     if ($upload -eq "y") {
         # Upload Conan package
         conan upload "$name/$version@$user/$channel" --all -r globus-conan-local
+    } else {
+        Write-Output "Skipping upload. -- if you change your mind, run: conan upload $name/$version@$user/$channel --all -r globus-conan-local"
     }
     
     Pop-Location
