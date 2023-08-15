@@ -1,6 +1,7 @@
+from collections import defaultdict, deque
+from enum import Enum
 import functools
 import hashlib
-import itertools
 import os
 import sys
 import traceback
@@ -69,7 +70,7 @@ def get_file_hashes(path_list: list[Path]) -> list[str]:
     if not os.environ.get("CLCACHE_SERVER_DISABLE"):
         if server_idle_timeout_s := _get_sever_timeout_seconds():
             try:
-                return _get_file_hashes_from_server(path_list, server_idle_timeout_s)
+                return _get_file_hashes_impl(path_list, server_idle_timeout_s)
             except FileNotFoundError:
                 # This is expected
                 raise
@@ -79,45 +80,60 @@ def get_file_hashes(path_list: list[Path]) -> list[str]:
     return [get_file_hash(path) for path in path_list]
 
 
-def _get_file_hashes_from_server(
-    path_list: list[Path], server_idle_timeout_s: int
-) -> list[str]:
-    # Categorize paths based on their location (build dir or not)
-    categorized_paths = [(path, is_in_build_dir(path)) for path in path_list]
+def _get_file_hashes_impl(path_list, server_idle_timeout_s):
+    class Location(Enum):
+        CACHE = 1
+        BUILD_DIR = 2
+        OTHER = 3
 
-    build_dir_paths = [path for path, in_build_dir in categorized_paths if in_build_dir]
-    other_paths = [path for path, in_build_dir in categorized_paths if not in_build_dir]
+    paths_by_location = defaultdict(deque)
+    path_locations = {}
+
+    for path in path_list:
+        if path in _get_file_hashes_impl.cache:
+            path_locations[path] = Location.CACHE
+        elif is_in_build_dir(path):
+            path_locations[path] = Location.BUILD_DIR
+            paths_by_location[Location.BUILD_DIR].append(path)
+        else:
+            path_locations[path] = Location.OTHER
+            paths_by_location[Location.OTHER].append(path)
 
     # Fetch hashes based on location
-    other_hashes = _get_file_hashes_from_server_impl(other_paths, server_idle_timeout_s)
-    build_dir_hashes = [get_file_hash(path) for path in build_dir_paths]
-
-    return list(
-        itertools.chain.from_iterable(
-            (build_dir_hashes if in_build_dir else other_hashes)
-            for _, in_build_dir in categorized_paths
-        )
+    other_hashes = _get_file_hashes_from_server(
+        paths_by_location[Location.OTHER], server_idle_timeout_s
+    )
+    build_dir_hashes = deque(
+        [get_file_hash(path) for path in paths_by_location[Location.BUILD_DIR]]
     )
 
+    hashes = []
 
-def _get_file_hashes_from_server_impl(
-    path_list: list[Path], server_idle_timeout_s: int
-) -> list[str]:
+    for path in path_list:
+        if path_locations[path] == Location.CACHE:
+            hashes.append(_get_file_hashes_impl.cache[path])
+        elif path_locations[path] == Location.BUILD_DIR:
+            hashes.append(build_dir_hashes.popleft())
+        else:
+            hashes.append(other_hashes.popleft())
+
+    return hashes
+
+
+_get_file_hashes_impl.cache = {}
+
+
+def _get_file_hashes_from_server(
+    path_list: deque[Path], server_idle_timeout_s: int
+) -> deque[str]:
     """Get file hashes from clcache server."""
 
-    # Launch clcache_server.exe located in the same directory as this executable
-    args = []
-    if "__compiled__" not in globals():
-        args.append(
-            Path(sys.argv[0]).absolute().parent
-            / "clcache_server/target/release/clcache_server.exe"
-        )
-    else:
-        args.append(Path(sys.executable).parent.parent / "clcache_server.exe")
+    # Return empty list if no paths
+    if not path_list:
+        return deque()
 
-    args.extend(
-        (f"--idle-timeout={server_idle_timeout_s}", f"--id={UUID}", "--client-mode")
-    )
+    # Launch clcache_server.exe located in the same directory as this executable
+    args = _construct_server_args(server_idle_timeout_s)
 
     with sp.Popen(
         args,
@@ -143,7 +159,28 @@ def _get_file_hashes_from_server_impl(
         # extract error string
         raise FileNotFoundError(response[1:-1])
 
-    return response[:-1].splitlines()
+    return deque(response[:-1].splitlines())
+
+
+def _construct_server_args(server_idle_timeout_s: int) -> list[str]:
+    """Construct arguments for server process."""
+    base_path = (
+        Path(sys.argv[0]).absolute().parent
+        if "__compiled__" not in globals()
+        else Path(sys.executable).parent.parent
+    )
+    server_exe = base_path / (
+        "clcache_server/target/release/clcache_server.exe"
+        if "__compiled__" not in globals()
+        else "clcache_server.exe"
+    )
+
+    return [
+        str(server_exe),
+        f"--idle-timeout={server_idle_timeout_s}",
+        f"--id={UUID}",
+        "--client-mode",
+    ]
 
 
 @functools.cache

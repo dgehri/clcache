@@ -605,6 +605,8 @@ def _process(cache: Cache,
                                      for path in entry.includeFiles]
                                 )
                             )
+                            
+                            # log(f"Includes content hash: {includes_content_hash}")
 
                             # Check if include files have changed, if so, skip this entry
                             if entry.includesContentHash != includes_content_hash:
