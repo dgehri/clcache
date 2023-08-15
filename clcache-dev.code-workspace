@@ -4,6 +4,9 @@
 			"path": "."
 		},
 		{
+			"path": "clcache_server"
+		},
+		{
 			"path": "couchbase_sync"
 		}
 	],
@@ -11,9 +14,6 @@
 		"files.associations": {
 			"variant": "cpp"
 		},
-		"[python]": {
-			"editor.defaultFormatter": "ms-python.black-formatter"
-		},
-		"python.formatting.provider": "none"
+		"powershell.cwd": "d:\\Development\\clcache-dev"
 	}
 }

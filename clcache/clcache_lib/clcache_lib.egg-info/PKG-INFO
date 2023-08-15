@@ -1,12 +1,11 @@
 Metadata-Version: 2.1
 Name: clcache-lib
-Version: 4.4.9
+Version: 4.4.18
 Summary: ClCache Library
 Home-page: https://github.com/dgehri/clcache
 Author: Various
 Author-email: Various
 License: LICENSE.txt
-Platform: UNKNOWN
 License-File: LICENSE.txt
 
 clcache.py - a compiler cache for Microsoft Visual Studio
@@ -205,5 +204,3 @@ Blechmann, Tilo Wiedera and other contributors.
 
 This program was heavily inspired by http://ccache.samba.org[ccache], a
 compiler cache for the http://gcc.gnu.org[GNU Compiler Collection].
-
-

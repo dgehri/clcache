@@ -1,65 +1,71 @@
-use std::{collections::HashMap, path::PathBuf, str::FromStr, time::Duration};
-
+use anyhow::Result;
 use log::{error, info, trace};
+use std::path::Path;
+use std::process::Stdio;
 use std::sync::Once;
+use std::{collections::HashMap, path::PathBuf, str::FromStr};
+use tokio::io::{self, BufReader, BufWriter};
+use tokio::process::Child;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
-    net::windows::named_pipe::{ClientOptions, NamedPipeClient},
     process::Command,
-    time,
 };
-use winapi::shared::winerror::ERROR_PIPE_BUSY;
 
 static INIT: Once = Once::new();
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 16)]
 async fn test_server() {
     INIT.call_once(|| {
         env_logger::builder()
             .filter_module("integration_test", log::LevelFilter::Trace)
-            .format_timestamp_millis()
+            .format(|buf, record| {
+                use std::io::Write;
+                writeln!(
+                    buf,
+                    "[{},{:?}] [{}] - {}",
+                    chrono::Local::now().format("%Y-%m-%d %H:%M:%S%.3f"),
+                    std::thread::current().id(),
+                    record.level(),
+                    record.args()
+                )
+            })
             .is_test(true)
             .try_init()
             .unwrap();
     });
 
-    let server_id = uuid::Uuid::new_v4().to_string();
-    let pipe_name = format!(r"\\.\pipe\\LOCAL\\clcache-{}", server_id);
-    let event_name = std::ffi::CString::new(format!(r"Local\ready-{}", server_id)).unwrap();
-
     // get project folder
     let project_folder = std::env::current_dir().unwrap();
 
-    // combine with clcache_server.exe path
-    #[cfg(debug_assertions)]
-    let server_path = project_folder.join("target/debug/clcache_server.exe");
-    #[cfg(not(debug_assertions))]
-    let server_path = project_folder.join("target/release/clcache_server.exe");
-
-    // Create event
-    let event = unsafe {
-        winapi::um::synchapi::CreateEventA(std::ptr::null_mut(), 0, 0, event_name.as_ptr())
-    };
-
-    // Launch the clcache_server.exe process found in the target directory.
-    // The server will listen on the pipe name specified in the constant PIPE_NAME.
-    let _server = Command::new(server_path)
-        .arg("--idle-timeout=10")
-        .arg(format!("--id={}", server_id))
-        .arg("--verbose")
-        .arg("--verbose")
-        .spawn()
-        .expect("Failed to start server");
-
-    // Wait up to 5 seconds until event is set (exit if timeout)
-    let now = time::Instant::now();
-    let wait_result = unsafe { winapi::um::synchapi::WaitForSingleObject(event, 5000) };
-    if wait_result != winapi::um::winbase::WAIT_OBJECT_0 {
-        panic!("Server did not start in time.");
-    } else {
-        info!("Server started in {} ms", now.elapsed().as_millis());
+    // quickly spawn 100 clients to test the server's ability to handle multiple clients
+    let mut handles = Vec::new();
+    for _ in 0..100 {
+        let project_folder = project_folder.clone();
+        handles.push(tokio::spawn(async move {
+            run_client_test(&project_folder).await;
+        }));
     }
 
+    // wait for all clients to finish
+    for handle in handles {
+        handle.await.unwrap();
+    }
+
+    // Terminate server (don't wait for response)
+    info!("Terminating server...");
+    match connect_to_server(&project_folder).await {
+        Ok((mut child, mut stdin, mut _stdout)) => {
+            let _ = stdin.write_all(b"exit\n").await;
+            let _ = child.kill().await;
+            let _ = child.wait().await;
+        }
+        Err(e) => {
+            error!("Failed to connect to server: {}", e);
+        }
+    }
+}
+
+async fn run_client_test(project_folder: &Path) {
     // map of expected file names and their hashes
     let test_files = vec![
         ("1/qjsonrpcservice.h", "1e69f8ad0d5e16cad26ab3bb454cf841"),
@@ -98,7 +104,7 @@ async fn test_server() {
         .iter()
         .take(3)
         .map(|(k, _)| test_file_base.join(k));
-    let hash_set_1 = get_file_hashes(&pipe_name, &test_file_set_1.collect()).await;
+    let hash_set_1 = get_file_hashes(project_folder, &test_file_set_1.collect()).await;
 
     // check that the hashes are correct
     for (file_path, hash) in hash_set_1.iter() {
@@ -112,7 +118,7 @@ async fn test_server() {
         .iter()
         .skip(3)
         .map(|(k, _)| test_file_base.join(k));
-    let hash_set_2 = get_file_hashes(&pipe_name, &test_file_set_2.collect()).await;
+    let hash_set_2 = get_file_hashes(project_folder, &test_file_set_2.collect()).await;
 
     // check that the hashes are correct
     for (file_path, hash) in hash_set_2.iter() {
@@ -122,7 +128,7 @@ async fn test_server() {
         );
     }
 
-    get_file_hashes(&pipe_name, &vec![PathBuf::from("foo")]).await;
+    get_file_hashes(project_folder, &vec![PathBuf::from("foo")]).await;
 
     // create a temporary folder with a file in it
     let temp_dir = tempfile::tempdir().unwrap();
@@ -130,98 +136,130 @@ async fn test_server() {
     std::fs::write(&temp_file_path, "foo").unwrap();
 
     // request the hash of the file
-    let hash1 = get_file_hashes(&pipe_name, &vec![temp_file_path.clone()]).await;
+    let hash1 = get_file_hashes(project_folder, &vec![temp_file_path.clone()]).await;
 
     // modify the file
     info!("Modifying file");
     std::fs::write(&temp_file_path, "bar").unwrap();
 
     // request the hash of the file
-    let hash2 = get_file_hashes(&pipe_name, &vec![temp_file_path.clone()]).await;
+    let hash2 = get_file_hashes(project_folder, &vec![temp_file_path.clone()]).await;
 
     // ensure that the hash has changed
     assert_ne!(hash1, hash2);
 
     // request the hash of the file
-    let hash3 = get_file_hashes(&pipe_name, &vec![temp_file_path.clone()]).await;
+    let hash3 = get_file_hashes(project_folder, &vec![temp_file_path.clone()]).await;
 
     // ensure that the hash has not changed
     assert_eq!(hash2, hash3);
-
-    // Terminate server (don't wait for response)
-    info!("Terminating server...");
-    let mut client = connect_to_server(&pipe_name).await;
-    client.write_all(b"*exit\0").await.unwrap();
-    let mut response = Vec::new();
-    client.read_to_end(&mut response).await.unwrap();
 }
 
-async fn connect_to_server(pipe_name: &str) -> NamedPipeClient {
-    loop {
-        match ClientOptions::new().open(&pipe_name) {
-            Ok(client) => break client,
-            Err(e) if e.raw_os_error() == Some(ERROR_PIPE_BUSY as i32) => (),
-            Err(e) => panic!("Failed to connect to server: {:?}", e),
-        }
+// launch executable in target directory with argument --client-mode and return a handle to stdin/stdout
+async fn connect_to_server(
+    project_folder: &Path,
+) -> Result<
+    (
+        Child,
+        BufWriter<tokio::process::ChildStdin>,
+        BufReader<tokio::process::ChildStdout>,
+    ),
+    io::Error,
+> {
+    let server_id = uuid::Uuid::new_v4().to_string();
 
-        time::sleep(Duration::from_millis(50)).await;
-    }
+    // combine with clcache_server.exe path
+    #[cfg(debug_assertions)]
+    let server_path = project_folder.join("target/debug/clcache_server.exe");
+    #[cfg(not(debug_assertions))]
+    let server_path = project_folder.join("target/release/clcache_server.exe");
+
+    // Launch the clcache_server.exe process found in the target directory.
+    let mut child = Command::new(server_path)
+        .arg("--idle-timeout=10")
+        .arg(format!("--id={}", server_id))
+        .arg("--client-mode")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("Failed to start server");
+
+    let stdin = child.stdin.take().ok_or(io::Error::new(
+        io::ErrorKind::BrokenPipe,
+        "Failed to open stdin",
+    ))?;
+    let stdin = BufWriter::new(stdin);
+
+    let stdout = child.stdout.take().ok_or(io::Error::new(
+        io::ErrorKind::BrokenPipe,
+        "Failed to open stdout",
+    ))?;
+    let stdout = BufReader::new(stdout);
+
+    Ok((child, stdin, stdout))
 }
 
-async fn get_file_hashes(pipe_name: &str, files: &Vec<PathBuf>) -> HashMap<PathBuf, String> {
-    // connect to server
-    let mut client = connect_to_server(pipe_name).await;
-
+async fn get_file_hashes(project_folder: &Path, files: &Vec<PathBuf>) -> HashMap<PathBuf, String> {
     // pack all file paths into a single query, separated by '\n'
     let mut query = Vec::new();
     for file_path in files {
         trace!("Sending file path: {:?}", file_path);
-        query.extend_from_slice(file_path.to_str().unwrap().as_bytes());
-        query.push(b'\n');
+        // append file path to query, followed by '\n'
+        query.extend(file_path.to_str().unwrap().as_bytes());
+        query.extend(b"\n");
     }
-    query.push(b'\0');
+    query.extend(b"\n");
 
-    client.write_all(&query).await.unwrap();
+    // connect to server
+    match connect_to_server(project_folder).await {
+        Ok((mut child, mut stdin, mut stdout)) => {
+            // send query to server
+            stdin.write_all(&query).await.unwrap();
+            stdin.flush().await.unwrap();
 
-    // read entire response into buffer
-    let mut response = Vec::new();
-    client.read_to_end(&mut response).await.unwrap();
+            // read entire response into buffer
+            let mut response = Vec::new();
+            stdout.read_to_end(&mut response).await.unwrap();
 
-    // if response starts with '!', then an error occurred
-    if response[0] == b'!' {
-        error!(
-            "Server returned error: {}",
-            String::from_utf8_lossy(&response[1..])
-        );
-        {}
-    }
+            // if response starts with '!', then an error occurred
+            if response[0] == b'!' {
+                error!(
+                    "Server returned error: {}",
+                    String::from_utf8_lossy(&response[1..])
+                );
+                {}
+            }
 
-    // response is a list of hashes, separated by '\n'
-    // the hashes will be returned in the same order as the files were sent
-    let mut result = HashMap::new();
-    for line in response.split(|&c| c == b'\n') {
-        if line[0] == b'\0' {
-            break;
+            // response is a list of hashes, separated by '\n'
+            // the hashes will be returned in the same order as the files were sent
+            let mut result = HashMap::new();
+            for line in response.split(|&c| c == b'\n') {
+                if line.is_empty() {
+                    break;
+                }
+
+                let hash = String::from_utf8_lossy(line);
+                let file_path = files.get(result.len()).unwrap().clone();
+
+                // strip trailing '?' from file_path
+                let file_path = if file_path.to_str().unwrap().ends_with('?') {
+                    PathBuf::from(file_path.to_str().unwrap().trim_end_matches('?'))
+                } else {
+                    file_path
+                };
+
+                result.insert(file_path, hash.to_string());
+            }
+
+            // wait for server to exit
+            child.wait().await.unwrap();
+
+            result
         }
-
-        let hash = String::from_utf8_lossy(line);
-        let file_path = files[result.len()].clone();
-
-        // strip trailing '?' from file_path
-        let file_path = if file_path.to_str().unwrap().ends_with('?') {
-            PathBuf::from(file_path.to_str().unwrap().trim_end_matches('?'))
-        } else {
-            file_path
-        };
-
-        info!(
-            "{}: {}",
-            file_path.file_name().unwrap().to_str().unwrap(),
-            hash
-        );
-
-        result.insert(file_path, hash.to_string());
+        Err(e) => {
+            error!("Failed to connect to server: {}", e);
+            HashMap::new()
+        }
     }
-
-    result
 }

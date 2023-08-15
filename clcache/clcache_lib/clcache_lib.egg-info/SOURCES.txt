@@ -16,7 +16,6 @@ clcache_lib/cache/hash.py
 clcache_lib/cache/manifest_entry.py
 clcache_lib/cache/persistent_json_dict.py
 clcache_lib/cache/remote_cache.py
-clcache_lib/cache/server.py
 clcache_lib/cache/stats.py
 clcache_lib/cache/virt.py
 clcache_lib/cl/__init__.py

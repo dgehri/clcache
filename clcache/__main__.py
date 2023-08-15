@@ -9,6 +9,9 @@
 import os
 import sys
 
+lib_path = os.path.join(os.path.abspath(os.path.dirname(__file__)), 'clcache_lib')
+sys.path.insert(0, lib_path)
+
 from clcache_lib.actions import (get_compiler_path, handle_clcache_options,
                                  parse_args)
 from clcache_lib.utils.logging import LogLevel, flush_logger, init_logger, log

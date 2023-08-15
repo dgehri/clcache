@@ -22,13 +22,13 @@
 # Update Couchbase and Couchbase-Sync
 
 1. Update images (see above)
-2. Update stack: `docker service update --image us-docker.pkg.dev/inr-ci/inr-docker/couchbase_sync:latest clcache_couchbase_sync`
+2. Update stack: `docker service update --with-registry-auth --image us-docker.pkg.dev/inr-ci/inr-docker/couchbase_sync:latest clcache_couchbase_sync`
 
 
 ```bash
 docker image build -t couchbase_sync:latest -f clcache_sync.Dockerfile .
 docker tag couchbase_sync:latest us-docker.pkg.dev/inr-ci/inr-docker/couchbase_sync:latest
 docker image push us-docker.pkg.dev/inr-ci/inr-docker/couchbase_sync:latest
-docker service update --image us-docker.pkg.dev/inr-ci/inr-docker/couchbase_sync:latest clcache_couchbase_sync
+docker service update --with-registry-auth --image us-docker.pkg.dev/inr-ci/inr-docker/couchbase_sync:latest clcache_couchbase_sync
 ```
 

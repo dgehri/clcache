@@ -1,6 +1,6 @@
 [package]
 name = "clcache_server"
-version = "4.4.9"
+version = "4.4.18"
 edition = "2021"
 authors = ["Daniel Gehriger <dgehriger@globusmedical.com>"]
 
@@ -22,3 +22,6 @@ log = "0.4"
 env_logger = "0.10.0"
 tempfile = "3.5.0"
 rand = "0.8"
+chrono = "0.4"
+widestring = "1.0.2"
+tokio-util = { version = "0.7.8", features = ["codec"] }
