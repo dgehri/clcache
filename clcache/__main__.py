@@ -35,7 +35,7 @@ def main() -> int:
         compiler_path, compiler_pkg, args = get_compiler_path()
 
         if "CLCACHE_DISABLE" in os.environ:
-            return compiler_pkg.invoke_real_compiler(compiler_path, args)[0]
+            return compiler_pkg._invoke_real_compiler(compiler_path, args)
 
         return compiler_pkg.process_compile_request(cache, compiler_path, args)
 

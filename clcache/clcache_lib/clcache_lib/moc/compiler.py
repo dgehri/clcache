@@ -148,9 +148,8 @@ def _invoke_real_compiler(compiler_path: Path,
 
     read_cmd_line = [str(compiler_path)] + cmd_line
 
-    # if command line longer than 32767 chars, use a response file
-    # See https://devblogs.microsoft.com/oldnewthing/20031210-00/?p=41553
-    if len(" ".join(read_cmd_line)) >= 32000:  # keep some chars as a safety margin
+    # Always use response file, unless very short command line
+    if len(" ".join(read_cmd_line)) >= 256:
         with TemporaryFile(mode="wt", suffix=".rsp") as rsp_file:
             rsp_file.writelines(" ".join(cmd_line) + "\n")
             rsp_file.flush()
@@ -180,9 +179,8 @@ def _capture_real_compiler(compiler_path: Path,
 
     read_cmd_line = [str(compiler_path)] + cmd_line
 
-    # if command line longer than 32767 chars, use a response file
-    # See https://devblogs.microsoft.com/oldnewthing/20031210-00/?p=41553
-    if len(" ".join(read_cmd_line)) >= 32000:  # keep some chars as a safety margin
+    # Always use response file, unless very short command line
+    if len(" ".join(read_cmd_line)) >= 256:
         with TemporaryFile(mode="wt", suffix=".rsp") as rsp_file:
             rsp_file.writelines(" ".join(cmd_line) + "\n")
             rsp_file.flush()
