@@ -9,7 +9,8 @@ $MainFunction = {
     $upload = Read-Host "Upload $name/$version@$user/$channel to globus-conan-local? (y/n)"
 
     $env:PATH = "C:\Program Files\Conan\conan;" + $env:PATH
-
+    $env:PIPENV_IGNORE_VIRTUALENVS = 1
+    
     Push-Location clcache\clcache_lib
     pip uninstall -y clcache-lib
     pip install -e .

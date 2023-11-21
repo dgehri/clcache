@@ -6,7 +6,7 @@ import sys
 import time
 import traceback
 from pathlib import Path
-from tempfile import TemporaryFile
+from tempfile import NamedTemporaryFile, TemporaryFile
 from typing import BinaryIO
 
 from ..cache.cache import Cache, Location, ensure_artifacts_exist
@@ -17,20 +17,22 @@ from ..cache.manifest_entry import create_manifest_entry
 from ..cache.stats import MissReason
 from ..cache.virt import canonicalize_path, expand_path
 from ..config.config import CL_DEFAULT_CODEC
-from ..utils.args import (ArgumentQtLong, ArgumentQtLongWithParam,
-                          ArgumentQtShort, ArgumentQtShortWithParam,
-                          CommandLineAnalyzer, expand_response_file)
+from ..utils.args import (
+    ArgumentQtLong,
+    ArgumentQtLongWithParam,
+    ArgumentQtShort,
+    ArgumentQtShortWithParam,
+    CommandLineAnalyzer,
+    expand_response_file,
+)
 from ..utils.errors import *
 from ..utils.file_lock import FileLock
 from ..utils.logging import LogLevel, log
-from ..utils.util import (correct_case_path, line_iter_b,
-                          print_stdout_and_stderr)
+from ..utils.util import correct_case_path, line_iter_b, print_stdout_and_stderr
 
 
 class MocCommandLineAnalyzer(CommandLineAnalyzer):
-
     def __init__(self):
-
         args = {
             # /<NAME>[ =]parameter
             ArgumentQtShortWithParam("n"),
@@ -64,7 +66,7 @@ class MocCommandLineAnalyzer(CommandLineAnalyzer):
             ArgumentQtLong("threshold-error"),
             ArgumentQtLong("show-include-hierarchy"),
             ArgumentQtLong("threshold-error-assert"),
-            ArgumentQtLong("show-includes")
+            ArgumentQtLong("show-includes"),
         }
 
         args_to_unify_and_sort = [
@@ -99,14 +101,15 @@ class MocCommandLineAnalyzer(CommandLineAnalyzer):
             ("include", False),
             ("n", False),
             ("dep-file-rule-name", False),
-            ("symbol-threshold", False)
+            ("symbol-threshold", False),
         ]
 
-        super().__init__(args=args,
-                         args_to_unify_and_sort=args_to_unify_and_sort)
+        super().__init__(args=args, args_to_unify_and_sort=args_to_unify_and_sort)
 
-    def analyze(self, cmdline: list[str]) -> tuple[Path, Path | None, dict[str, list[str]]]:
-        '''
+    def analyze(
+        self, cmdline: list[str]
+    ) -> tuple[Path, Path | None, dict[str, list[str]]]:
+        """
         Analyzes the command line and returns a list of input and output files.
 
         Parameters:
@@ -114,7 +117,7 @@ class MocCommandLineAnalyzer(CommandLineAnalyzer):
 
         Returns:
             Input header files and output moc file.
-        '''
+        """
 
         args, input_files = self.parse_args_and_input_files(cmdline)
 
@@ -141,22 +144,33 @@ class MocCommandLineAnalyzer(CommandLineAnalyzer):
         return input_file, output_file, args
 
 
-def _invoke_real_compiler(compiler_path: Path,
-                          cmd_line: list[str]) \
-        -> tuple[int, str, str]:
-    '''Invoke the real compiler and return its exit code, stdout and stderr.'''
+def is_disabled() -> bool:
+    return "MOCCACHE_DISABLED" in os.environ or "CLCACHE_DISABLE" in os.environ
+
+def _invoke_real_compiler(
+    compiler_path: Path, cmd_line: list[str], disable_auto_rsp=False
+) -> tuple[int, str, str]:
+    """Invoke the real compiler and return its exit code, stdout and stderr."""
+
 
     read_cmd_line = [str(compiler_path)] + cmd_line
 
-    # Always use response file, unless very short command line
-    if len(" ".join(read_cmd_line)) >= 256:
-        with TemporaryFile(mode="wt", suffix=".rsp") as rsp_file:
-            rsp_file.writelines(" ".join(cmd_line) + "\n")
-            rsp_file.flush()
-            return _invoke_real_compiler(
-                compiler_path,
-                [f"@{os.path.realpath(rsp_file.name)}"]
-            )
+    # Use response file if MOCCACHE_USE_RSP set, unless very short command line
+    disable_auto_rsp |= "MOCCACHE_USE_RSP" not in os.environ
+
+    if not disable_auto_rsp and len(" ".join(read_cmd_line)) >= 256:
+        with NamedTemporaryFile(mode="wt", suffix=".rsp", delete=False) as rsp_file:
+            rsp_file.write(" ".join(cmd_line) + "\n")
+            temp_file_path = rsp_file.name  # Save the path before the file is closed
+
+        result = _invoke_real_compiler(
+            compiler_path,
+            [f"@{os.path.realpath(temp_file_path)}"],
+            disable_auto_rsp=True,
+        )
+
+        os.remove(temp_file_path)
+        return result
 
     log(f"Invoking compiler: {read_cmd_line}")
 
@@ -172,22 +186,29 @@ def _invoke_real_compiler(compiler_path: Path,
     return return_code, stdout, stderr
 
 
-def _capture_real_compiler(compiler_path: Path,
-                           cmd_line: list[str]) \
-        -> tuple[int, str, str]:
-    '''Invoke the real compiler and return its exit code, stdout and stderr.'''
+def _capture_real_compiler(
+    compiler_path: Path, cmd_line: list[str], disable_auto_rsp=False
+) -> tuple[int, str, str]:
+    """Invoke the real compiler and return its exit code, stdout and stderr."""
 
     read_cmd_line = [str(compiler_path)] + cmd_line
 
-    # Always use response file, unless very short command line
-    if len(" ".join(read_cmd_line)) >= 256:
-        with TemporaryFile(mode="wt", suffix=".rsp") as rsp_file:
-            rsp_file.writelines(" ".join(cmd_line) + "\n")
-            rsp_file.flush()
-            return _capture_real_compiler(
-                compiler_path,
-                [f"@{os.path.realpath(rsp_file.name)}"]
-            )
+    # Use response file if MOCCACHE_USE_RSP set, unless very short command line
+    disable_auto_rsp |= "MOCCACHE_USE_RSP" not in os.environ
+    
+    if not disable_auto_rsp and len(" ".join(read_cmd_line)) >= 256:
+        with NamedTemporaryFile(mode="wt", suffix=".rsp", delete=False) as rsp_file:
+            rsp_file.write(" ".join(cmd_line) + "\n")
+            temp_file_path = rsp_file.name  # Save the path before the file is closed
+
+        result = _capture_real_compiler(
+            compiler_path,
+            [f"@{os.path.realpath(temp_file_path)}"],
+            disable_auto_rsp=True,
+        )
+
+        os.remove(temp_file_path)
+        return result
 
     log(f"Invoking compiler: {read_cmd_line}")
 
@@ -213,12 +234,12 @@ def _capture_real_compiler(compiler_path: Path,
 
 
 def process_compile_request(cache: Cache, compiler: Path, args: list[str]) -> int:
-    '''
+    """
     Process a compile request.
 
     Returns:
         The exit code of the compiler.
-    '''
+    """
     log("Command line: '{!s}'".format(" ".join(args)))
 
     cmdline = expand_response_file(args)
@@ -229,25 +250,19 @@ def process_compile_request(cache: Cache, compiler: Path, args: list[str]) -> in
         analyzer = MocCommandLineAnalyzer()
         header_file, output_file, options = analyzer.analyze(cmdline)
         return _schedule_jobs(
-            cache, compiler, cmdline,
-            header_file, output_file, analyzer, options
+            cache, compiler, cmdline, header_file, output_file, analyzer, options
         )
     except InvalidArgumentError:
-        log(f"Cannot cache invocation as {cmdline}: invalid argument",
-            LogLevel.ERROR)
-        cache.statistics.record_cache_miss(
-            MissReason.CALL_WITH_INVALID_ARGUMENT)
+        log(f"Cannot cache invocation as {cmdline}: invalid argument", LogLevel.ERROR)
+        cache.statistics.record_cache_miss(MissReason.CALL_WITH_INVALID_ARGUMENT)
     except NoSourceFileError:
         log(f"Cannot cache invocation as {cmdline}: no source file found")
         cache.statistics.record_cache_miss(MissReason.CALL_WITHOUT_SOURCE_FILE)
     except MultipleSourceFilesComplexError:
-        log(
-            f"Cannot cache invocation as {cmdline}: multiple source files found")
-        cache.statistics.record_cache_miss(
-            MissReason.CALL_WITH_MULTIPLE_SOURCE_FILES)
+        log(f"Cannot cache invocation as {cmdline}: multiple source files found")
+        cache.statistics.record_cache_miss(MissReason.CALL_WITH_MULTIPLE_SOURCE_FILES)
     except CalledWithPchError:
-        log(
-            f"Cannot cache invocation as {cmdline}: precompiled headers in use")
+        log(f"Cannot cache invocation as {cmdline}: precompiled headers in use")
         cache.statistics.record_cache_miss(MissReason.CALL_WITH_PCH)
     except CalledForLinkError:
         log(f"Cannot cache invocation as {cmdline}: called for linking")
@@ -256,21 +271,17 @@ def process_compile_request(cache: Cache, compiler: Path, args: list[str]) -> in
         log(
             f"Cannot cache invocation as {cmdline}: external debug information (/Zi) is not supported"
         )
-        cache.statistics.record_cache_miss(
-            MissReason.CALL_FOR_EXTERNAL_DEBUG_INFO)
+        cache.statistics.record_cache_miss(MissReason.CALL_FOR_EXTERNAL_DEBUG_INFO)
     except CalledForPreprocessingError:
-        log(
-            f"Cannot cache invocation as {cmdline}: called for preprocessing")
+        log(f"Cannot cache invocation as {cmdline}: called for preprocessing")
         cache.statistics.record_cache_miss(MissReason.CALL_FOR_PREPROCESSING)
 
     except CalledForJsonOutputError:
-        log(
-            f"Cannot cache invocation as {cmdline}: called for JSON output")
+        log(f"Cannot cache invocation as {cmdline}: called for JSON output")
         cache.statistics.record_cache_miss(MissReason.CACHE_FAILURE)
 
     except CalledWithoutOutputFile:
-        log(
-            f"Cannot cache invocation as {cmdline}: called without output file")
+        log(f"Cannot cache invocation as {cmdline}: called without output file")
         cache.statistics.record_cache_miss(MissReason.CACHE_FAILURE)
 
     exit_code, _, _ = _invoke_real_compiler(compiler, args)
@@ -284,17 +295,16 @@ def _schedule_jobs(
     header_file: Path,
     output_file: Path | None,
     analyzer: MocCommandLineAnalyzer,
-    options: dict[str, list[str]]
+    options: dict[str, list[str]],
 ) -> int:
-    '''
+    """
     Schedule jobs for the given command line.
 
     Parameters:
-    '''
+    """
     exit_code: int = 0
     exit_code, out, err = _process_single_source(
-        cache, compiler, cmd_line, header_file,
-        output_file, analyzer, options
+        cache, compiler, cmd_line, header_file, output_file, analyzer, options
     )
     log(f"Finished. Exit code {exit_code:d}", force_flush=True)
     print_stdout_and_stderr(out, err, CL_DEFAULT_CODEC)
@@ -302,22 +312,25 @@ def _schedule_jobs(
     return exit_code
 
 
-def _process_single_source(cache: Cache,
-                           compiler: Path,
-                           cmdline: list[str],
-                           header_file: Path,
-                           output_file: Path | None,
-                           analyzer: MocCommandLineAnalyzer,
-                           options: dict[str, list[str]]) \
-        -> tuple[int, str, str]:
-    '''
+def _process_single_source(
+    cache: Cache,
+    compiler: Path,
+    cmdline: list[str],
+    header_file: Path,
+    output_file: Path | None,
+    analyzer: MocCommandLineAnalyzer,
+    options: dict[str, list[str]],
+) -> tuple[int, str, str]:
+    """
     Process a single source file.
         Returns:
             tuple[int, str, str]: A tuple containing the exit code, stdout, stderr
-    '''
+    """
     try:
         assert output_file is not None
-        return _process(cache, output_file, compiler, cmdline, header_file, analyzer, options)
+        return _process(
+            cache, output_file, compiler, cmdline, header_file, analyzer, options
+        )
 
     except CompilerFailedException as e:
         return e.get_compiler_result()
@@ -326,14 +339,16 @@ def _process_single_source(cache: Cache,
         return _invoke_real_compiler(compiler, cmdline)
 
 
-def _process(cache: Cache,
-             output_file: Path,
-             compiler_path: Path,
-             cmdline: list[str],
-             header_file: Path,
-             analyzer: MocCommandLineAnalyzer,
-             options: dict[str, list[str]]) -> tuple[int, str, str]:
-    '''
+def _process(
+    cache: Cache,
+    output_file: Path,
+    compiler_path: Path,
+    cmdline: list[str],
+    header_file: Path,
+    analyzer: MocCommandLineAnalyzer,
+    options: dict[str, list[str]],
+) -> tuple[int, str, str]:
+    """
     Process a single source file.
 
         Parameters:
@@ -344,16 +359,17 @@ def _process(cache: Cache,
 
         Returns:
             tuple[int, str, str]: A tuple containing the exit code, stdout, stderr
-    '''
+    """
 
     # Get manifest hash
     manifest_hash: str = _get_manifest_hash(
-        compiler_path, cmdline, header_file, analyzer)
+        compiler_path, cmdline, header_file, analyzer
+    )
 
     # Acquire lock for manifest hash to prevent two jobs from compiling the same source
     # file at the same time. This is a frequent situation on Jenkins, and having the 2nd
     # job wait for the 1st job to finish compiling the source file is more efficient overall.
-    with FileLock(manifest_hash, 120*1000*1000):
+    with FileLock(manifest_hash, 120 * 1000 * 1000):
         manifest_hit = False
         cache_key = None
 
@@ -365,15 +381,12 @@ def _process(cache: Cache,
 
                     # Check if manifest entry exists
                     for entry_index, entry in enumerate(manifest.entries()):
-
                         # NOTE: command line options already included in hash for manifest name
                         with contextlib.suppress(IncludeNotFoundException):
-
                             # Get hash of include files
                             includes_content_hash = (
                                 ManifestRepository.get_includes_content_hash_for_files(
-                                    [expand_path(path)
-                                     for path in entry.includeFiles]
+                                    [expand_path(path) for path in entry.includeFiles]
                                 )
                             )
 
@@ -397,23 +410,27 @@ def _process(cache: Cache,
                                 if hit:
                                     # Object cache hit!
                                     result = _process_cache_hit(
-                                        cache, output_file, cache_key)
+                                        cache, output_file, cache_key
+                                    )
 
                                     if "output-dep-file" in options:
                                         # Determine depencency file path
-                                        dep_file_path = output_file.parent / \
-                                            f"{output_file.name}.d"
+                                        dep_file_path = (
+                                            output_file.parent / f"{output_file.name}.d"
+                                        )
                                         _safe_unlink(dep_file_path)
 
                                         # Determine target name
                                         rule_name = output_file
                                         if "dep-file-rule-name" in options:
                                             rule_name = Path(
-                                                options["dep-file-rule-name"][0])
+                                                options["dep-file-rule-name"][0]
+                                            )
 
                                         # create depencency file
                                         _create_dep_file(
-                                            dep_file_path, rule_name, entry.includeFiles)
+                                            dep_file_path, rule_name, entry.includeFiles
+                                        )
 
                                     return result
 
@@ -427,8 +444,7 @@ def _process(cache: Cache,
         # If we get here, we have a cache miss and we'll need to invoke the real compiler
         if manifest_hit:
             # Got a manifest, but no object => invoke real compiler
-            compiler_result = _capture_real_compiler(
-                compiler_path, cmdline)
+            compiler_result = _capture_real_compiler(compiler_path, cmdline)
 
             with cache.manifest_lock_for(manifest_hash):
                 assert cache_key is not None
@@ -439,7 +455,8 @@ def _process(cache: Cache,
                     output_file,
                     compiler_result,
                     output_file_filter=lambda i, o: _canonicalize_moc_output_file(
-                        i, o, output_file)
+                        i, o, output_file
+                    ),
                 )
         else:
             # Also generate manifest
@@ -450,8 +467,7 @@ def _process(cache: Cache,
                 remove_dep_file = True
 
             # Invoke real compiler and get output
-            compiler_result = _capture_real_compiler(
-                compiler_path, cmdline)
+            compiler_result = _capture_real_compiler(compiler_path, cmdline)
 
             # Parse dependency file
             dep_file_path = output_file.parent / f"{output_file.name}.d"
@@ -473,7 +489,8 @@ def _process(cache: Cache,
 
                     manifest.add_entry(entry)
                     new_size = cache.set_manifest(
-                        manifest_hash, manifest, location=Location.LOCAL)
+                        manifest_hash, manifest, location=Location.LOCAL
+                    )
 
                 # Setting remote manifest outside lock
                 cache.set_manifest(manifest_hash, manifest, Location.REMOTE)
@@ -487,16 +504,17 @@ def _process(cache: Cache,
                 compiler_result,
                 post_commit_action=add_manifest,
                 output_file_filter=lambda i, o: _canonicalize_moc_output_file(
-                    i, o, output_file)
+                    i, o, output_file
+                ),
             )
 
 
-def _canonicalize_moc_output_file(file_in: BinaryIO,
-                                  file_out: BinaryIO,
-                                  output_file: Path):
-    '''
+def _canonicalize_moc_output_file(
+    file_in: BinaryIO, file_out: BinaryIO, output_file: Path
+):
+    """
     Canonicalizes the include statements in the MOC file (output_file)
-    '''
+    """
     re_include = re.compile(rb"^#include\s+\"(.*)\"")
     filter_line = True
     stop_line = b"QT_BEGIN_MOC_NAMESPACE"
@@ -510,21 +528,25 @@ def _canonicalize_moc_output_file(file_in: BinaryIO,
                     include_path = output_file.parent / include_path
 
                 canonicalized_path = canonicalize_path(
-                    include_path.resolve().absolute())
-                line = line[:m.start(1)] + \
-                    canonicalized_path.encode() + line[m.end(1):]
+                    include_path.resolve().absolute()
+                )
+                line = (
+                    line[: m.start(1)] + canonicalized_path.encode() + line[m.end(1) :]
+                )
 
         # write to output file
         file_out.write(line)
 
 
-def _get_manifest_hash(compiler_path: Path,
-                       cmd_line: list[str],
-                       src_file: Path,
-                       analyzer: MocCommandLineAnalyzer) -> str:
-    '''
+def _get_manifest_hash(
+    compiler_path: Path,
+    cmd_line: list[str],
+    src_file: Path,
+    analyzer: MocCommandLineAnalyzer,
+) -> str:
+    """
     Returns a hash of the manifest file that would be used for the given command line.
-    '''
+    """
     compiler_hash = get_compiler_hash(compiler_path)
 
     args, input_files = analyzer.parse_args_and_input_files(cmd_line)
@@ -578,10 +600,9 @@ def _safe_unlink(path: Path) -> None:
         path.unlink()
 
 
-def _create_dep_file(dep_file_path: Path,
-                     rule: Path,
-                     include_paths: list[str]) -> None:
+def _create_dep_file(dep_file_path: Path, rule: Path, include_paths: list[str]) -> None:
     """Create a dependency file."""
+
     def escaped_path(path: Path) -> str:
         return path.as_posix().replace("\\", "\\\\").replace(" ", "\\ ")
 
@@ -597,9 +618,9 @@ def _create_dep_file(dep_file_path: Path,
         dep_file.write("\n")
 
 
-def _process_cache_hit(cache: Cache,
-                       output_file: Path,
-                       cache_key: str) -> tuple[int, str, str]:
+def _process_cache_hit(
+    cache: Cache, output_file: Path, cache_key: str
+) -> tuple[int, str, str]:
     """
     Process a cache hit, copying the object file from the cache to the output directory.
 
@@ -612,8 +633,7 @@ def _process_cache_hit(cache: Cache,
         Returns:
             A tuple of the exit code, the stdout, the stderr
     """
-    log(
-        f"Reusing cached object for key {cache_key} for output file {output_file}")
+    log(f"Reusing cached object for key {cache_key} for output file {output_file}")
 
     with cache.lock_for(cache_key):
         cache.statistics.record_cache_hit()
@@ -624,9 +644,9 @@ def _process_cache_hit(cache: Cache,
         assert cached_artifacts is not None
 
         def copy_filter(file_in, file_out):
-            '''
+            """
             Expands the include statements in the MOC file
-            '''
+            """
             re_include = re.compile(rb"^#include\s+\"(.*)\"")
             filter_line = True
             stop_line = b"QT_BEGIN_MOC_NAMESPACE"
@@ -641,22 +661,21 @@ def _process_cache_hit(cache: Cache,
                         with contextlib.suppress(ValueError, OSError):
                             # get correct case of include file
                             expanded_path = correct_case_path(expanded_path)
-                            expanded_path = Path(os.path.relpath(
-                                expanded_path, output_file.parent))
+                            expanded_path = Path(
+                                os.path.relpath(expanded_path, output_file.parent)
+                            )
 
-                        line = line[:m.start(1)] + \
-                            expanded_path.as_posix().encode() + line[m.end(1):]
+                        line = (
+                            line[: m.start(1)]
+                            + expanded_path.as_posix().encode()
+                            + line[m.end(1) :]
+                        )
 
                 # write to output file
                 file_out.write(line)
 
-        copy_from_cache(cached_artifacts.payload_path,
-                        output_file, copy_filter)
-        return (
-            0,
-            cached_artifacts.stdout,
-            cached_artifacts.stderr
-        )
+        copy_from_cache(cached_artifacts.payload_path, output_file, copy_filter)
+        return (0, cached_artifacts.stdout, cached_artifacts.stderr)
 
 
 def _parse_dep_file(dep_file_path: Path) -> list[Path]:
@@ -668,7 +687,7 @@ def _parse_dep_file(dep_file_path: Path) -> list[Path]:
         # find the first colon, which separates the target from the dependencies,
         # but ignore drive letters followed by a colon, which are part of Windows paths.
         if m := re.match(r"^(\s*(?:[a-zA-Z]:)?[^:]*:)", buf):
-            buf = buf[m.end() + 1:]
+            buf = buf[m.end() + 1 :]
 
             # join lines ending with a backslash
             buf = re.sub(r"\\\r?\n", "", buf)
@@ -677,6 +696,9 @@ def _parse_dep_file(dep_file_path: Path) -> list[Path]:
             lines = filter(None, re.split(r"(?<!\\)\s+", buf))
 
             # convert the list of strings into a list of Path objects
-            return [Path(os.path.normpath(line.replace("\\", "").strip())).absolute() for line in lines]
+            return [
+                Path(os.path.normpath(line.replace("\\", "").strip())).absolute()
+                for line in lines
+            ]
 
     return []
