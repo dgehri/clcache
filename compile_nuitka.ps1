@@ -1,3 +1,5 @@
+$scriptPath = Split-Path $MyInvocation.MyCommand.Path -Parent
+
 $MainFunction = {
     $packageInfo = GetPackageInfo
     $name = $packageInfo.name
@@ -10,18 +12,20 @@ $MainFunction = {
 
     $env:PATH = "C:\Program Files\Conan\conan;" + $env:PATH
     $env:PIPENV_IGNORE_VIRTUALENVS = 1
+
+    # Get current directory
+    $env:PIPENV_PIPFILE = Join-Path $scriptPath "clcache\Pipfile"
     
     Push-Location clcache\clcache_lib
-    pip uninstall -y clcache-lib
-    pip install -e .
+    pipenv uninstall -y clcache-lib
+    pipenv run pip install -e .
     Pop-Location
 
     # Print Nuitka version to stdout, prefixed with "Nuitka version: "
-    $env:PIPENV_PIPFILE = "clcache\Pipfile"
     $nuitkaVersion = pipenv run python -m nuitka --version
     Write-Output "Nuitka version: $nuitkaVersion"
 
-    pipenv run python -m nuitka --standalone --plugin-enable=pylint-warnings --python-flag="-O" --mingw64 .\clcache
+    pipenv run python -m nuitka --standalone --plugin-enable=pylint-warnings --no-deployment-flag=self-execution --python-flag="-O" --mingw64 .\clcache
 
     Push-Location conan
     $env:CONAN_REVISIONS_ENABLED = 1

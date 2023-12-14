@@ -5,10 +5,11 @@ import os
 import re
 import sys
 import threading
+from collections.abc import Generator
 from ctypes import wintypes
 from pathlib import Path
 from shutil import rmtree
-from collections.abc import Generator
+from typing import Any, Callable
 
 import scandir
 
@@ -32,7 +33,7 @@ def print_stdout_and_stderr(out: str, err: str, encoding: str):
 
 @functools.cache
 def resolve(path: Path) -> Path:
-    '''Resolve a path, caching the result for future calls.'''
+    """Resolve a path, caching the result for future calls."""
 
     try:
         return path.resolve()
@@ -41,12 +42,10 @@ def resolve(path: Path) -> Path:
 
 
 _GetShortPathNameW = ctypes.windll.kernel32.GetShortPathNameW
-_GetShortPathNameW.argtypes = [
-    wintypes.LPCWSTR, wintypes.LPWSTR, wintypes.DWORD]
+_GetShortPathNameW.argtypes = [wintypes.LPCWSTR, wintypes.LPWSTR, wintypes.DWORD]
 _GetShortPathNameW.restype = wintypes.DWORD
 _GetLongPathNameW = ctypes.windll.kernel32.GetLongPathNameW
-_GetLongPathNameW.argtypes = [
-    wintypes.LPCWSTR, wintypes.LPWSTR, wintypes.DWORD]
+_GetLongPathNameW.argtypes = [wintypes.LPCWSTR, wintypes.LPWSTR, wintypes.DWORD]
 _GetLongPathNameW.restype = wintypes.DWORD
 
 
@@ -117,9 +116,9 @@ def child_dirs(path: Path, absolute=True) -> Generator[Path, None, None]:
 
 
 def remove_and_recreate_dir(path: Path):
-    '''
+    """
     Remove directory if it exists and create a new one.
-    '''
+    """
     rmtree(path, ignore_errors=True)
     ensure_dir_exists(path)
 
@@ -134,46 +133,47 @@ def ensure_dir_exists(path: Path):
 
 
 def line_iter(str: str) -> Generator[str, None, None]:
-    '''
+    """
     Iterate over lines in a string, separated by newline characters.
 
     The returned lines include the newline character.
-    '''
+    """
     pos = 0
     while True:
-        next_pos = str.find('\n', pos)
+        next_pos = str.find("\n", pos)
         if next_pos < 0:
             yield str[pos:]
             break
-        yield str[pos:next_pos+1]
-        pos = next_pos+1
+        yield str[pos : next_pos + 1]
+        pos = next_pos + 1
 
 
 def line_iter_b(str: bytes) -> Generator[bytes, None, None]:
-    '''
+    """
     Iterate over lines in a string, separated by newline characters.
 
     The returned lines include the newline character.
-    '''
+    """
     pos = 0
     while True:
-        next_pos = str.find(b'\n', pos)
+        next_pos = str.find(b"\n", pos)
         if next_pos < 0:
             yield str[pos:]
             break
-        yield str[pos:next_pos+1]
-        pos = next_pos+1
+        yield str[pos : next_pos + 1]
+        pos = next_pos + 1
 
 
 @functools.cache
 def get_build_dir() -> Path:
-    '''
+    """
     Get the build directory.
 
-    Get the build directory from the CLCACHE_BUILDDIR environment 
-    variable. If it is not set, use the current working directory 
+    Get the build directory from the CLCACHE_BUILDDIR environment
+    variable. If it is not set, use the current working directory
     to determine it.
-    '''
+    """
+
     def impl():
         if value := os.environ.get("CLCACHE_BUILDDIR"):
             build_dir = Path(value)
@@ -195,11 +195,11 @@ def get_build_dir() -> Path:
 
 @functools.cache
 def normalize_dir(dir_path: Path) -> Path:
-    '''
+    """
     Normalize a directory path, removing trailing slashes.
 
     This is a workaround for https://bugs.python.org/issue9949
-    '''
+    """
     result = os.path.normcase(os.path.abspath(os.path.normpath(str(dir_path))))
     if result.endswith(os.path.sep):
         result = result[:-1]
@@ -207,5 +207,12 @@ def normalize_dir(dir_path: Path) -> Path:
 
 
 def correct_case_path(path: Path) -> Path:
-    pattern = re.sub(r'([^:/\\])(?=[/\\]|$)', r'[\1]', os.path.normpath(path))
+    pattern = re.sub(r"([^:/\\])(?=[/\\]|$)", r"[\1]", os.path.normpath(path))
     return Path(r[0]) if (r := glob.glob(pattern)) else path
+
+
+def str_or_none(s: Any, func: Callable[[str], str] | None = None) -> str | None:
+    if func is None:
+        func = lambda x: x
+
+    return func(str(s)) if s is not None else None

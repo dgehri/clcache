@@ -1,6 +1,6 @@
 [package]
 name = "clcache_server"
-version = "4.4.22"
+version = "4.4.25"
 edition = "2021"
 authors = ["Daniel Gehriger <dgehriger@globusmedical.com>"]
 

@@ -12,6 +12,7 @@ from ..utils import (
     line_iter_b,
     normalize_dir,
     resolve,
+    str_or_none,
 )
 from ..utils.logging import LogLevel, log
 from ..utils.util import get_build_dir
@@ -23,6 +24,7 @@ BUILDDIR_REPLACEMENT: str = "<BUILD_DIR>"
 CONANDIR_REPLACEMENT: str = "<CONAN_USER_HOME>"
 QTDIR_REPLACEMENT: str = "<QT_DIR>"
 LLVM_REPLACEMENT: str = "<LLVM_DIR>"
+GM_VENV_REPLACEMENT: str = "<GM_VENV_DIR>"
 MAX_PATH = 260
 
 # LLVM folder path, represented <LLVM> placeholder
@@ -91,6 +93,8 @@ def expand_path(path: str) -> Path:
         return Path(path.replace(BUILDDIR_REPLACEMENT, str(BUILDDIR_STR), 1))
     elif CONAN_USER_HOME and _path_starts_with_placeholder(path, CONANDIR_REPLACEMENT):
         return _expand_conan_placeholder(CONAN_USER_HOME, path)
+    elif GM_VENV_DIR_STR and _path_starts_with_placeholder(path, GM_VENV_REPLACEMENT):
+        return Path(path.replace(GM_VENV_REPLACEMENT, GM_VENV_DIR_STR, 1))
     elif QT_DIR_STR and _path_starts_with_placeholder(path, QTDIR_REPLACEMENT):
         return Path(path.replace(QTDIR_REPLACEMENT, QT_DIR_STR, 1))
     elif LLVM_DIR_STR and _path_starts_with_placeholder(path, LLVM_REPLACEMENT):
@@ -124,6 +128,7 @@ def canonicalize_path(path: Path) -> str:
         or _canonicalize_qt_dir(path_str)
         or _canonicalize_llvm_dir(path_str)
         or _canonicalize_toolchain_dirs(path_str)
+        or _canonicalize_gm_venv_dirs(path_str)
         or _canonicalization_failed(path_str)
     )
 
@@ -333,14 +338,46 @@ def _get_base_dir(build_dir: Path) -> Path | None:
     return result
 
 
+def _get_gm_venv_dir(build_dir: Path, base_dir: Path | None) -> Path | None:
+    """
+    Get the gm-venv directory.
+
+    Location is:
+     - at `GM_VENV_HOME`
+     - common_folder(BUILDDIR_STR, BASE_DIR_STR)/gm-venv
+    """
+
+    venv_home_folder = os.environ.get("GM_VENV_HOME")
+    if venv_home_folder:
+        venv_home_folder = os.path.normpath(venv_home_folder)
+        if not os.path.isdir(venv_home_folder):
+            venv_home_folder = None
+
+    if not venv_home_folder:
+        if not base_dir:
+            return None
+
+        base_folder = os.path.commonpath([base_dir, build_dir])
+        if not base_folder or not os.path.isdir(base_folder):
+            return None
+
+        venv_home_folder = os.path.normpath(os.path.join(base_folder, "gm-venv"))
+
+    return Path(venv_home_folder) if os.path.isdir(venv_home_folder) else None
+
+
 # This is the build dir, where the compiler is executed
 BUILDDIR_STR: str = str(get_build_dir()).lower()
 
 # This is the resolved build dir, where the compiler is executed
-BUILDDIR_RESOLVED_STR: str | None = str(_get_dir_resolved(Path(BUILDDIR_STR))).lower()
+BUILDDIR_RESOLVED_STR: str | None = str_or_none(
+    _get_dir_resolved(Path(BUILDDIR_STR)), lambda x: x.lower()
+)
 
 # This is the base dir, where the source code is located
-BASEDIR_STR: str | None = str(_get_base_dir(Path(BUILDDIR_STR))).lower()
+BASEDIR_STR: str | None = str_or_none(
+    _get_base_dir(Path(BUILDDIR_STR)), lambda x: x.lower()
+)
 
 # This is the resolved base dir, where the source code is located
 BASEDIR_RESOLVED_STR: str | None = (
@@ -355,6 +392,17 @@ BASEDIR_ESC: str | None = (
 
 # This is the build dir, but with forward slashes
 BUILDDIR_ESC: str = BUILDDIR_STR.replace("\\", "/")
+
+# Location gm-venv directory
+GM_VENV_DIR_STR: str | None = str_or_none(
+    _get_gm_venv_dir(Path(BUILDDIR_STR), Path(BASEDIR_STR) if BASEDIR_STR else None),
+    lambda x: x.lower(),
+)
+
+GM_VENV_DIR_RESOLVED_STR: str | None = (
+    str(_get_dir_resolved(Path(GM_VENV_DIR_STR))).lower() if GM_VENV_DIR_STR else None
+)
+
 
 # Pattern to match the <env:...> placeholder
 RE_ENV: re.Pattern[str] = re.compile(r"^<env:([^>]+)>", flags=re.IGNORECASE)
@@ -422,6 +470,20 @@ def _canonicalize_build_dir(path_str: str) -> str | None:
         return r
     elif r := subst_with_placeholder(
         path_str, BUILDDIR_RESOLVED_STR, BUILDDIR_REPLACEMENT
+    ):
+        return r
+    else:
+        return None
+
+
+def _canonicalize_gm_venv_dirs(path_str: str) -> str | None:
+    """
+    Canonicalize gm-venv paths
+    """
+    if r := subst_with_placeholder(path_str, GM_VENV_DIR_STR, GM_VENV_REPLACEMENT):
+        return r
+    elif r := subst_with_placeholder(
+        path_str, GM_VENV_DIR_RESOLVED_STR, GM_VENV_REPLACEMENT
     ):
         return r
     else:
