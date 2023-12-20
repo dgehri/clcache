@@ -32,7 +32,7 @@ class MessageBuffer:
     def flush(self):  # sourcery skip: use-contextlib-suppress
         try:
             with self._lock:
-                with FileLock.for_path(self._output_file):
+                with FileLock.for_path(self._output_file, log_locking_errors=False):
                     with open(self._output_file, "a") as f:
                         for message in self._messages:
                             # write message to file, separated by newline

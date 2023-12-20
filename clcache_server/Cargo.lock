@@ -176,7 +176,7 @@ checksum = "8a2dd5a6fe8c6e3502f568a6353e5273bbb15193ad9a89e457b9970798efbea1"
 
 [[package]]
 name = "clcache_server"
-version = "4.4.25"
+version = "4.4.26"
 dependencies = [
  "anyhow",
  "chrono",

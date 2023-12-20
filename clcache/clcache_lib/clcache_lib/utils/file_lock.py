@@ -15,10 +15,11 @@ class FileLock:
     WAIT_ABANDONED_CODE = 0x00000080
     WAIT_TIMEOUT_CODE = 0x00000102
 
-    def __init__(self, mutex_name: str, timeout_ms: int):
+    def __init__(self, mutex_name: str, timeout_ms: int, log_locking_errors: bool = True):
         self._mutex_name = "Local\\" + mutex_name
         self._mutex = None
         self._timeout_ms = timeout_ms
+        self._log_locking_errors = log_locking_errors
         self._t0 = None
         self._acquired = False
 
@@ -61,7 +62,7 @@ class FileLock:
         self._t0 = datetime.datetime.now()
         
         elapsed = (self._t0  - t0).total_seconds()
-        if elapsed > 2:
+        if self._log_locking_errors and elapsed > 2:
             from ..utils.logging import LogLevel, log
             log(
                 f"Waited for lock {self._mutex_name} during {elapsed:.1f} s",
@@ -74,7 +75,7 @@ class FileLock:
             t0 = self._t0
             windll.kernel32.ReleaseMutex(self._mutex)
             
-            if t0:
+            if self._log_locking_errors and t0:
                 elapsed = (datetime.datetime.now() - t0).total_seconds()
                 if elapsed > 2:
                     from ..utils.logging import LogLevel, log
@@ -84,7 +85,6 @@ class FileLock:
                     )
 
     @staticmethod
-    def for_path(path: Path):
-        timeout_ms = 10 * 1000
+    def for_path(path: Path, timeout_ms: int = 10 * 1000, log_locking_errors: bool = True):
         lock_name = str(path).replace(":", "-").replace("\\", "-")
-        return FileLock(lock_name, timeout_ms)
+        return FileLock(lock_name, timeout_ms, log_locking_errors)
