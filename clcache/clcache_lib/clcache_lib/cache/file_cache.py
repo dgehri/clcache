@@ -495,9 +495,10 @@ class CacheFileStrategy:
         self.persistent_stats.save_combined(self.current_stats)
 
         # also save the current stats to the build directory
-        build_stats = PersistentStats(
-            Path(BUILDDIR_STR) / f"{get_program_name()}.json")
-        build_stats.save_combined(self.current_stats)
+        with contextlib.suppress(Exception):
+            build_stats = PersistentStats(
+                Path(BUILDDIR_STR) / f"{get_program_name()}.json")
+            build_stats.save_combined(self.current_stats)
 
     @property
     @contextlib.contextmanager

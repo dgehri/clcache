@@ -250,7 +250,7 @@ def process_compile_request(cache: Cache, compiler: Path, args: list[str]) -> in
         analyzer = MocCommandLineAnalyzer()
         header_file, output_file, options = analyzer.analyze(cmdline)
         return _schedule_jobs(
-            cache, compiler, cmdline, header_file, output_file, analyzer, options
+            cache, compiler, cmdline, header_file, output_file, analyzer, options, original_cmd_line=args
         )
     except InvalidArgumentError:
         log(f"Cannot cache invocation as {cmdline}: invalid argument", LogLevel.ERROR)
@@ -296,6 +296,7 @@ def _schedule_jobs(
     output_file: Path | None,
     analyzer: MocCommandLineAnalyzer,
     options: dict[str, list[str]],
+    original_cmd_line: list[str],
 ) -> int:
     """
     Schedule jobs for the given command line.
@@ -304,7 +305,7 @@ def _schedule_jobs(
     """
     exit_code: int = 0
     exit_code, out, err = _process_single_source(
-        cache, compiler, cmd_line, header_file, output_file, analyzer, options
+        cache, compiler, cmd_line, header_file, output_file, analyzer, options, original_cmd_line
     )
     log(f"Finished. Exit code {exit_code:d}", force_flush=True)
     print_stdout_and_stderr(out, err, CL_DEFAULT_CODEC)
@@ -320,6 +321,7 @@ def _process_single_source(
     output_file: Path | None,
     analyzer: MocCommandLineAnalyzer,
     options: dict[str, list[str]],
+    original_cmd_line: list[str],
 ) -> tuple[int, str, str]:
     """
     Process a single source file.
@@ -329,7 +331,7 @@ def _process_single_source(
     try:
         assert output_file is not None
         return _process(
-            cache, output_file, compiler, cmdline, header_file, analyzer, options
+            cache, output_file, compiler, cmdline, header_file, analyzer, options, original_cmd_line
         )
 
     except CompilerFailedException as e:
@@ -347,6 +349,7 @@ def _process(
     header_file: Path,
     analyzer: MocCommandLineAnalyzer,
     options: dict[str, list[str]],
+    original_cmd_line: list[str],
 ) -> tuple[int, str, str]:
     """
     Process a single source file.
@@ -444,7 +447,7 @@ def _process(
         # If we get here, we have a cache miss and we'll need to invoke the real compiler
         if manifest_hit:
             # Got a manifest, but no object => invoke real compiler
-            compiler_result = _capture_real_compiler(compiler_path, cmdline)
+            compiler_result = _capture_real_compiler(compiler_path, original_cmd_line)
 
             with cache.manifest_lock_for(manifest_hash):
                 assert cache_key is not None
@@ -467,7 +470,7 @@ def _process(
                 remove_dep_file = True
 
             # Invoke real compiler and get output
-            compiler_result = _capture_real_compiler(compiler_path, cmdline)
+            compiler_result = _capture_real_compiler(compiler_path, original_cmd_line)
 
             # Parse dependency file
             dep_file_path = output_file.parent / f"{output_file.name}.d"

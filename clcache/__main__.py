@@ -56,6 +56,8 @@ if __name__ == "__main__":
         log("Exception: {!s}".format(
             traceback.format_exc()), level=LogLevel.ERROR, force_flush=True)
 
-        sys.exit(1)
+        # Fall back to original compiler
+        compiler_path, compiler_pkg, args = get_compiler_path()
+        sys.exit(compiler_pkg._invoke_real_compiler(compiler_path, args, disable_auto_rsp=True))
     finally:
         flush_logger()
