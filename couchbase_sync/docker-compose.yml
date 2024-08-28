@@ -37,7 +37,7 @@ services:
   couchbase_sync:
     image: us-docker.pkg.dev/inr-ci/inr-docker/couchbase_sync:latest
     environment:
-      - NODES=10.105.20.235,10.250.20.241
+      - NODES=10.105.20.235,10.250.20.251
     deploy:
       replicas: 1
       restart_policy:

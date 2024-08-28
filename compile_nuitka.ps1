@@ -30,7 +30,7 @@ $MainFunction = {
     Push-Location conan
     $env:CONAN_REVISIONS_ENABLED = 1
 
-    # Export Conan package
+    # Export Conan package (if this fails, ensure you have conan 1.x)
     conan export-pkg conanfile.py --force
 
     if ($upload -eq "y") {

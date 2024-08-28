@@ -1,3 +1,8 @@
+# Preconditions
+
+Consult https://docs.globusmedical.com/confluence/x/lmDVDQ to ensure you are authenticated to 
+the Globus Google Cloud Docker registry.
+
 # Deploy Couchbase and Couchbase-Sync
 
 1. Create swarm: `docker swarm init`
