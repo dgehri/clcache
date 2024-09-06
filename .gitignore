@@ -26,3 +26,5 @@ clcache_launcher/target/**
 clcache_server/target/**
 pyuv/**
 launch.json
+*.egg-info
+clcache/clcachelib/build

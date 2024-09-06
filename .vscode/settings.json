@@ -7,6 +7,6 @@
     "python.analysis.typeCheckingMode": "basic",
     "python.venvPath": "C:\\Users\\Daniel\\.virtualenvs",
     "python.analysis.extraPaths": [
-        "./clcache/clcache_lib"
+        "./clcache/clcachelib"
     ]
 }

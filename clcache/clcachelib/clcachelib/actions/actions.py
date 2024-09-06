@@ -13,9 +13,9 @@ from pathlib import Path
 from shutil import which
 from types import ModuleType
 
-from clcache_lib.cache.ex import LogicException
-from clcache_lib.config import VERSION
-from clcache_lib.utils.logging import log
+from clcachelib.cache.ex import LogicException
+from clcachelib.config import VERSION
+from clcachelib.utils.logging import log
 
 
 def parse_args() -> argparse.Namespace | None:
@@ -116,7 +116,7 @@ def _find_compiler_binary() -> Path | None:
 
 def handle_clcache_options(clcache_options: argparse.Namespace, cache) -> int | None:
     # sourcery skip: extract-duplicate-method
-    from clcache_lib.cache.cache import (clean_cache, clear_cache,
+    from clcachelib.cache.cache import (clean_cache, clear_cache,
                                          print_statistics, reset_stats)
 
     if clcache_options.show_stats:
@@ -209,14 +209,14 @@ def get_compiler_path() -> tuple[Path, ModuleType, list[str]]:
 
     if identity == "clcache":
         compiler_pkg = __import__(
-            "clcache_lib.cl.compiler", fromlist=["compiler"])
+            "clcachelib.cl.compiler", fromlist=["compiler"])
 
         if compiler_path is None:
             compiler_path = _find_compiler_binary()
 
     elif identity == "moccache":
         compiler_pkg = __import__(
-            "clcache_lib.moc.compiler", fromlist=["compiler"])
+            "clcachelib.moc.compiler", fromlist=["compiler"])
 
         if compiler_path is None:
             compiler_path = _get_compiler_path_from_moccache_config()

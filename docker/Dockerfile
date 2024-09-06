@@ -1,32 +1,28 @@
 # From https://github.com/webcomics/pywine/blob/main/Dockerfile
-FROM tobix/pywine:3.10
+FROM tobix/pywine:3.11
 
 # Also install winetricks
 RUN dpkg --add-architecture i386 && \
     sed -i 's/^Components: main$/& contrib non-free/' /etc/apt/sources.list.d/debian.sources && \
     apt-get update && \
-    apt-get install -y --no-install-recommends winetricks cabextract && \
+    apt-get install -y --no-install-recommends winetricks cabextract expect patch wget && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
-# Install MFC42
-RUN xvfb-run sh -c "winetricks -q mfc42; wineserver -w"
-
-# Wine: Add C:\Python\Scripts to PATH
-ENV PATH="C:\\Python\\Scripts;${PATH}"
-
 # Install required Python modules
+COPY requirements.txt /opt/clcache/requirements.txt
 RUN wine cmd /c setx PATH "C:\\Python\\Scripts;%PATH%" && \
-    wine pip install --use-pep517 \
-    atomicwrites \
-    conan~=1.0 \
-    lz4 \
-    nuitka \
-    scandir
+    wine pip install --use-pep517 -r /opt/clcache/requirements.txt
 
+# Fetch Dependency Walker
 ENV DEPENDS_DIR="/opt/wineprefix/drive_c/users/root/AppData/Local/Nuitka/Nuitka/Cache/downloads/depends/x86_64"
-ADD https://www.dependencywalker.com/depends22_x86.zip ${DEPENDS_DIR}/depends22_x86.zip
-RUN unzip ${DEPENDS_DIR}/depends22_x86.zip -d ${DEPENDS_DIR}
+WORKDIR ${DEPENDS_DIR}
+RUN wget https://www.dependencywalker.com/depends22_x86.zip && \
+    unzip depends22_x86.zip
+
+# Patch the Nuitka DependsExe.py to make it work with Wine
+COPY DependsExe.patch /opt/clcache/DependsExe.patch
+RUN find /opt/wineprefix/drive_c -name DependsExe.py -exec patch -d $(dirname {}) -p0 < /opt/clcache/DependsExe.patch \;
 
 # Compile a dummy Python program to force Nuitka to download the MinGW compiler
 #

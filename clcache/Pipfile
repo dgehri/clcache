@@ -9,8 +9,9 @@ lz4 = "*"
 atomicwrites = "*"
 couchbase = "*"
 nuitka = "*"
+conan = "~=1.0"
 
 [dev-packages]
 
 [requires]
-python_version = "3.10"
+python_version = "3.11"

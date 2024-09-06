@@ -6,15 +6,23 @@ from typing import BinaryIO
 from couchbase.auth import PasswordAuthenticator
 from couchbase.cluster import Bucket, Cluster
 from couchbase.collection import Collection
-from couchbase.options import (ClusterOptions, ClusterTimeoutOptions,
-                               GetAndTouchOptions, RemoveOptions, TouchOptions,
-                               UpsertOptions)
-from couchbase.exceptions import (DocumentNotFoundException)
+from couchbase.options import (
+    ClusterOptions,
+    ClusterTimeoutOptions,
+    GetAndTouchOptions,
+    RemoveOptions,
+    TouchOptions,
+    UpsertOptions,
+)
+from couchbase.exceptions import DocumentNotFoundException
 
 from ..cache.cache import Location
 from ..cache.stats import MissReason
-from ..config import (COUCHBASE_ACCESS_TIMEOUT, COUCHBASE_CONNECT_TIMEOUT,
-                      COUCHBASE_EXPIRATION)
+from ..config import (
+    COUCHBASE_ACCESS_TIMEOUT,
+    COUCHBASE_CONNECT_TIMEOUT,
+    COUCHBASE_EXPIRATION,
+)
 from .couchbase_ex import RawBinaryTranscoderEx
 from .file_cache import *
 
@@ -36,9 +44,11 @@ def make_bad_if_exception(func):
             raise CacheBadException
 
         except CacheBadException:
+            log("Flagging remote cache as bad (CacheBadException)", level=LogLevel.ERROR)
             self._is_bad = True
             raise
         except Exception as e:
+            log(f"Flagging remote cache as bad: {str(e)}", level=LogLevel.ERROR)
             self._is_bad = True
             raise CacheBadException from e
 
@@ -72,12 +82,15 @@ class CacheCouchbaseStrategy:
             ),
         )
 
+        log(f"Connecting to remote cache at {self.host}", level=LogLevel.INFO)
+
     @property
     @make_bad_if_exception
     def _cluster(self) -> Cluster:
         if not self.__cluster:
             self.__cluster = Cluster(
-                f"couchbase://{self.host}", self._opts)  # type: ignore
+                f"couchbase://{self.host}", self._opts
+            )  # type: ignore
         return self.__cluster
 
     @property
@@ -105,8 +118,7 @@ class CacheCouchbaseStrategy:
     @make_bad_if_exception
     def _coll_object_data(self) -> Collection:
         if not self.__coll_object_data:
-            self.__coll_object_data = self._bucket.collection(
-                "objects_data")
+            self.__coll_object_data = self._bucket.collection("objects_data")
         return self.__coll_object_data
 
     @staticmethod
@@ -124,26 +136,34 @@ class CacheCouchbaseStrategy:
         try:
             return self._fetch_entry_impl(key)
         except DocumentNotFoundException:
-            pass
-        except Exception:
+            log(f"Object {key} not found in remote cache", level=LogLevel.TRACE)
+        except Exception as e:
+            log(
+                f"Could not fetch {key} from remote cache: {str(e)}",
+                level=LogLevel.TRACE,
+            )
             self._is_bad = True
         self._cache[key] = None
         return False
 
     def _fetch_entry_impl(self, key: str) -> bool:
-        '''Fetches an entry from the cache and stores it in self.cache.'''
+        """Fetches an entry from the cache and stores it in self.cache."""
 
-        res = self._coll_objects.get_and_touch(key, COUCHBASE_EXPIRATION,
-                                               GetAndTouchOptions(
-                                                   timeout=COUCHBASE_ACCESS_TIMEOUT))  # type: ignore
+        res = self._coll_objects.get_and_touch(
+            key,
+            COUCHBASE_EXPIRATION,
+            GetAndTouchOptions(timeout=COUCHBASE_ACCESS_TIMEOUT),
+        )  # type: ignore
         verify_success(res)
 
         payload = res.content_as[dict]
 
-        if "chunk_count" not in payload \
-                or "md5" not in payload \
-                or "stdout" not in payload \
-                or "stderr" not in payload:
+        if (
+            "chunk_count" not in payload
+            or "md5" not in payload
+            or "stdout" not in payload
+            or "stderr" not in payload
+        ):
             return False
 
         chunk_count = payload["chunk_count"]
@@ -166,8 +186,9 @@ class CacheCouchbaseStrategy:
             res = self._coll_objects.remove(key)
             verify_success(res)
             for i in range(1, chunk_count + 1):
-                res = self._coll_object_data.remove(f"{key}-{i}",
-                                                    RemoveOptions(timeout=COUCHBASE_ACCESS_TIMEOUT))  # type: ignore
+                res = self._coll_object_data.remove(
+                    f"{key}-{i}", RemoveOptions(timeout=COUCHBASE_ACCESS_TIMEOUT)
+                )  # type: ignore
                 verify_success(res)
 
             return False
@@ -177,55 +198,51 @@ class CacheCouchbaseStrategy:
         return True
 
     def has_entry(self, key: str) -> bool:
-        '''
+        """
         Returns true if the cache contains an entry for the given key.
 
         Returns:
             A tuple of (has entry, is local cache entry).
-        '''
+        """
         in_cache = key in self._cache and self._cache[key] is not None
         return in_cache or self._fetch_entry(key)
 
     def get_entry_as_payload(self, key: str) -> dict | None:
-        '''
+        """
         Returns the entry as a dict, or None if it is not in the cache.
-        '''
+        """
         if key not in self._cache:
             self._fetch_entry(key)
         return None if self._cache[key] is None else self._cache[key]
 
-    def set_entry_from_compressed(self,
-                                  key: str,
-                                  artifacts: CompilerArtifacts,
-                                  compressed_payload_path: Path):
-        '''
+    def set_entry_from_compressed(
+        self, key: str, artifacts: CompilerArtifacts, compressed_payload_path: Path
+    ):
+        """
         Stores the given artifacts in the cache.
 
         Returns:
             The number of bytes stored in the cache. 0 if the entry was not stored.
-        '''
+        """
         if self._is_bad:
             return
 
         try:
             with open(compressed_payload_path, "rb") as obj_file:
-                self._set_entry_from_compressed_file(
-                    obj_file, key, artifacts)
-        except Exception:
+                self._set_entry_from_compressed_file(obj_file, key, artifacts)
+        except Exception as e:
             self._is_bad = True
-            log(f"Could not set {key} in remote cache",
-                level=LogLevel.TRACE)
+            log(f"Could not set {key} in remote cache: {str(e)}", level=LogLevel.TRACE)
 
-    def _set_entry_from_compressed_file(self,
-                                        obj_file: BinaryIO,
-                                        key: str,
-                                        artifacts: CompilerArtifacts):
-        '''
+    def _set_entry_from_compressed_file(
+        self, obj_file: BinaryIO, key: str, artifacts: CompilerArtifacts
+    ):
+        """
         Stores the given artifacts in the cache.
 
         Returns:
             The number of bytes stored in the cache. 0 if the entry was not stored.
-        '''
+        """
 
         obj_data = obj_file.read()
         obj_view = memoryview(obj_data)
@@ -244,14 +261,16 @@ class CacheCouchbaseStrategy:
                 sub_key,
                 obj_view[s:e],  # type: ignore
                 UpsertOptions(
-                    transcoder=RawBinaryTranscoderEx(),
-                    timeout=COUCHBASE_ACCESS_TIMEOUT)  # type: ignore
-                ,
+                    transcoder=RawBinaryTranscoderEx(), timeout=COUCHBASE_ACCESS_TIMEOUT
+                ),  # type: ignore
             )
             verify_success(res)
 
-            res = self._coll_object_data.touch(sub_key, COUCHBASE_EXPIRATION, TouchOptions(
-                timeout=COUCHBASE_ACCESS_TIMEOUT))  # type: ignore
+            res = self._coll_object_data.touch(
+                sub_key,
+                COUCHBASE_EXPIRATION,
+                TouchOptions(timeout=COUCHBASE_ACCESS_TIMEOUT),
+            )  # type: ignore
             verify_success(res)
 
         payload = {
@@ -260,16 +279,18 @@ class CacheCouchbaseStrategy:
             "chunk_count": i,
             "md5": hasher.hexdigest(),
         }
-        res = self._coll_objects.upsert(key, payload, UpsertOptions(
-            timeout=COUCHBASE_ACCESS_TIMEOUT))  # type: ignore
+        res = self._coll_objects.upsert(
+            key, payload, UpsertOptions(timeout=COUCHBASE_ACCESS_TIMEOUT)
+        )  # type: ignore
         verify_success(res)
 
         res = self._coll_objects.touch(
-            key, COUCHBASE_EXPIRATION, timeout=COUCHBASE_ACCESS_TIMEOUT)  # type: ignore
+            key, COUCHBASE_EXPIRATION, timeout=COUCHBASE_ACCESS_TIMEOUT
+        )  # type: ignore
         verify_success(res)
 
     def set_manifest(self, key: str, manifest: Manifest):
-        '''
+        """
         Set the manifest in the remote cache
 
         Important:
@@ -278,26 +299,29 @@ class CacheCouchbaseStrategy:
             between the time we fetch the existing manifest and the time we write
             the new manifest.
 
-            Also, we are likely to write a manifest referencing object keys 
+            Also, we are likely to write a manifest referencing object keys
             that do not exist in the remote cache. This is not a major issue, as
             the result is simply that retrieving the object will fail.
-        '''
+        """
         if self._is_bad:
+            log(f"Remote cache is bad, not writing manifest {key}", level=LogLevel.TRACE)
             return
+        
+        log(f"Writing manifest {key} to remote cache")     
 
         try:
             # First fetch existing manifest
             if remote_manifest := self.get_manifest(key):
                 # Merge the manifests
-                entries = list(
-                    set(remote_manifest.entries() + manifest.entries()))
+                entries = list(set(remote_manifest.entries() + manifest.entries()))
                 manifest = Manifest(entries)
 
             entries = [e._asdict() for e in manifest.entries()]
             json_object = {"entries": entries}
             if coll_manifests := self._coll_manifests:
-                res = coll_manifests.upsert(key, json_object, UpsertOptions(
-                    timeout=COUCHBASE_ACCESS_TIMEOUT))  # type: ignore
+                res = coll_manifests.upsert(
+                    key, json_object, UpsertOptions(timeout=COUCHBASE_ACCESS_TIMEOUT)
+                )  # type: ignore
                 verify_success(res)
                 res = coll_manifests.touch(key, COUCHBASE_EXPIRATION)
                 verify_success(res)
@@ -308,27 +332,29 @@ class CacheCouchbaseStrategy:
     @functools.cache
     def get_manifest(self, key: str) -> Manifest | None:
         if self._is_bad:
+            log(f"Remote cache is bad, not reading manifest {key}", level=LogLevel.TRACE)
             return None
 
         try:
             res = self._coll_manifests.get_and_touch(
-                key, COUCHBASE_EXPIRATION,
-                GetAndTouchOptions(timeout=COUCHBASE_ACCESS_TIMEOUT))  # type: ignore
+                key,
+                COUCHBASE_EXPIRATION,
+                GetAndTouchOptions(timeout=COUCHBASE_ACCESS_TIMEOUT),
+            )  # type: ignore
             verify_success(res)
             return Manifest(
                 [
                     ManifestEntry(
-                        e["includeFiles"],
-                        e["includesContentHash"],
-                        e["objectHash"]
+                        e["includeFiles"], e["includesContentHash"], e["objectHash"]
                     )
                     for e in res.content_as[dict]["entries"]
                 ]
             )
         except DocumentNotFoundException:
-            pass
-        except Exception:
+            log(f"Manifest {key} not found in remote cache", level=LogLevel.TRACE)
+        except Exception as e:
             self._is_bad = True
+            log(f"Could not fetch {key} from remote cache: {str(e)}", level=LogLevel.TRACE)
 
         # invalidate cache entry
         self._cache[key] = None
@@ -351,21 +377,21 @@ class CacheFileWithCouchbaseFallbackStrategy:
         return f"CacheFileWithCouchbaseFallbackStrategy {self.local_cache} and {self.remote_cache}"
 
     def has_entry(self, key: str) -> bool:
-        '''
+        """
         Returns true if the cache contains an entry for the given key.
 
         Returns:
             A tuple of (has entry, is local cache entry).
-        '''
+        """
         hit = self.local_cache.has_entry(key)
         return True if hit else self.remote_cache.has_entry(key)
 
     def get_entry(self, key: str) -> CompilerArtifacts | None:
-        '''
+        """
         Returns the cache entry, or None if it is not in the cache.
 
         If the entry is in the remote cache, it will be copied into the local cache.
-        '''
+        """
         if self.local_cache.has_entry(key):
             log(f"Fetching object {key} from local cache")
             return self.local_cache.get_entry(key)
@@ -377,54 +403,53 @@ class CacheFileWithCouchbaseFallbackStrategy:
             # record the hit, and size of the object in the stats
             self.local_cache.current_stats.register_cache_entry_size(size)
             self.local_cache.current_stats.register_cache_entry(
-                MissReason.REMOTE_CACHE_HIT)
+                MissReason.REMOTE_CACHE_HIT
+            )
 
             return self.local_cache.get_entry(key)
 
         return None
 
     def set_entry(self, key: str, artifacts) -> int:
-        '''
+        """
         Sets the cache entry.
 
         Returns:
             The size of the entry in bytes.
-        '''
-        size, compressed_payload_path = self.local_cache.set_entry_ex(
-            key, artifacts)
+        """
+        size, compressed_payload_path = self.local_cache.set_entry_ex(key, artifacts)
         if compressed_payload_path:
             self.remote_cache.set_entry_from_compressed(
-                key, artifacts, compressed_payload_path)
+                key, artifacts, compressed_payload_path
+            )
         return size
 
-    def set_manifest(self,
-                     manifest_hash: str,
-                     manifest: Manifest,
-                     location=Location.LOCAL_AND_REMOTE) -> int:
-        '''
+    def set_manifest(
+        self, manifest_hash: str, manifest: Manifest, location=Location.LOCAL_AND_REMOTE
+    ) -> int:
+        """
         Sets the manifest in the cache.
 
         This will also set the manifest in the remote cache.
-        '''
+        """
         size = 0
         if location & Location.LOCAL:
             with self.local_cache.manifest_lock_for(manifest_hash):
-                size = self.local_cache.set_manifest(
-                    manifest_hash, manifest, location)
+                size = self.local_cache.set_manifest(manifest_hash, manifest, location)
 
         if location & Location.REMOTE:
             self.remote_cache.set_manifest(manifest_hash, manifest)
 
         return size
 
-    def get_manifest(self,
-                     manifest_hash: str,
-                     skip_remote: bool) -> tuple[Manifest, int] | None:
-        '''
+    def get_manifest(
+        self, manifest_hash: str, skip_remote: bool
+    ) -> tuple[Manifest, int] | None:
+        """
         Returns the manifest, or None if it is not in the cache.
 
         If the manifest is in the remote cache, it will be copied into the local cache.
-        '''
+        """
         if local := self.local_cache.get_manifest(manifest_hash):
             log(f"Local manifest hit for {manifest_hash}")
             return local
@@ -433,17 +458,19 @@ class CacheFileWithCouchbaseFallbackStrategy:
             if remote := self.remote_cache.get_manifest(manifest_hash):
                 with self.local_cache.manifest_lock_for(manifest_hash):
                     size = self.local_cache.set_manifest(
-                        manifest_hash, remote, Location.LOCAL)
+                        manifest_hash, remote, Location.LOCAL
+                    )
 
                     # record the size of the manifest in the stats
-                    self.local_cache.current_stats.register_cache_entry_size(
-                        size)
+                    self.local_cache.current_stats.register_cache_entry_size(size)
 
                 log(
                     f"Remote manifest hit for {manifest_hash}, writing into local cache"
                 )
                 return remote, size
-
+            
+            log(f"Remote manifest miss for {manifest_hash}", level=LogLevel.TRACE)
+            
         return None
 
     @property

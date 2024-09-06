@@ -1,5 +1,3 @@
-$scriptPath = Split-Path $MyInvocation.MyCommand.Path -Parent
-
 $MainFunction = {
     $packageInfo = GetPackageInfo
     $name = $packageInfo.name
@@ -10,27 +8,26 @@ $MainFunction = {
     # Ask your user if upload is desired
     $upload = Read-Host "Upload $name/$version@$user/$channel to globus-conan-local? (y/n)"
 
-    $env:PATH = "C:\Program Files\Conan\conan;" + $env:PATH
-    $env:PIPENV_IGNORE_VIRTUALENVS = 1
+    python -m pip install --use-pep517 -r clcache\requirements.txt
 
-    # Get current directory
-    $env:PIPENV_PIPFILE = Join-Path $scriptPath "clcache\Pipfile"
-    
+    $env:PYTHONPATH = "C:\src\clcache\clcachelib\clcachelib"
+
     Push-Location clcache\clcachelib
-    pipenv uninstall -y clcachelib
-    pipenv run pip install -e .
+    python -m pip install .
     Pop-Location
 
     # Print Nuitka version to stdout, prefixed with "Nuitka version: "
-    $nuitkaVersion = pipenv run python -m nuitka --version
+    $nuitkaVersion = python -m nuitka --version
     Write-Output "Nuitka version: $nuitkaVersion"
 
-    pipenv run python -m nuitka `
+    python -m nuitka `
         --standalone `
         --plugin-enable=pylint-warnings `
         --no-deployment-flag=self-execution `
         --python-flag="-O" `
         --mingw64 `
+        --remove-output `
+        --disable-ccache `
         --report=clcache.dist\report.xml `
         .\clcache
 

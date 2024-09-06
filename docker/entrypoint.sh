@@ -18,11 +18,21 @@ main() {
     # Get package info
     get_package_info
 
-    # Navigate to clcache/clcache_lib and run pipenv commands
-    pushd "$srcPath/clcache/clcache_lib" > /dev/null
-    wine pip uninstall -y clcache-lib
-    wine pip install -e .
+    # Add clcache/clcachelib/clcachelib to the PYTHONPATH
+    wine setx PYTHONPATH "Z:\\src\\clcache\\clcachelib\\clcachelib"
+
+    # Install additional dependencies from requirements.txt
+    wine pip install -r "Z:\\src\\clcache\\requirements.txt" || exit 1
+
+    # Install clcache library
+    pushd "$srcPath/clcache/clcachelib" > /dev/null
+    wine pip install . || exit 1
     popd > /dev/null
+
+    # # Locate DependsExe.py below the .virtualenvs directory and patch it
+    # dependsExePath=$(find /opt/wineprefix/drive_c/users/root/.virtualenvs -name DependsExe.py)
+    # patchPath=/src/docker/DependsExe.patch
+    # patch "$dependsExePath" "$patchPath" || exit 1
 
     # Get Nuitka version and display it
     nuitkaVersion=$(wine python -m nuitka --version)
@@ -30,13 +40,17 @@ main() {
 
     # Run Nuitka
     pushd "$srcPath" > /dev/null
-    wine cmd /c \
+    unbuffer wine \
         python -m nuitka \
         --standalone \
         --plugin-enable=pylint-warnings \
         --no-deployment-flag=self-execution \
+        --disable-ccache \
+        --remove-output \
+        --report=/src/clcache.dist/report.xml \
         --python-flag="-O" \
-        --mingw64 clcache
+        --mingw64 clcache; \
+        wineserver -w &&
     popd > /dev/null
 
     # Export Conan package

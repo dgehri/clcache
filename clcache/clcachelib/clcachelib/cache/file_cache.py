@@ -98,8 +98,7 @@ class ManifestSection:
     def set_manifest(self, manifest_hash: str, manifest: Manifest) -> int:
         '''Writes manifest to disk and returns the size of the manifest file'''
         manifest_path = self.manifest_path(manifest_hash)
-        log(
-            f"Writing manifest with manifest_hash = {manifest_hash} to {manifest_path}")
+        log(f"Writing manifest {manifest_hash} to local {manifest_path}")
         ensure_dir_exists(self.manifestSectionDir)
 
         # Retry writing manifest file in case of concurrent

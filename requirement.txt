@@ -7,3 +7,4 @@ ordered-set==4.1.0
 pywin32==306
 scandir==1.10.0
 zstandard==0.20.0
+clcache_lib

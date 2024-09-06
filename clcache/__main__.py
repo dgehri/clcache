@@ -9,14 +9,13 @@
 import os
 import sys
 
-lib_path = os.path.join(os.path.abspath(os.path.dirname(__file__)), 'clcache_lib')
+lib_path = os.path.join(os.path.abspath(os.path.dirname(__file__)), "clcachelib")
 sys.path.insert(0, lib_path)
 
-from clcache_lib.actions import (get_compiler_path, handle_clcache_options,
-                                 parse_args)
-from clcache_lib.utils.logging import LogLevel, flush_logger, init_logger, log
-from clcache_lib.utils.util import get_build_dir
-from clcache_lib.cache.cache import Cache
+from clcachelib.actions import get_compiler_path, handle_clcache_options, parse_args
+from clcachelib.utils.logging import LogLevel, flush_logger, init_logger, log
+from clcachelib.utils.util import get_build_dir
+from clcachelib.cache.cache import Cache
 
 
 def main() -> int:
@@ -26,16 +25,17 @@ def main() -> int:
     clcache_options = parse_args()
 
     with Cache() as cache:
-
         if clcache_options is not None:
             exit_code = handle_clcache_options(clcache_options, cache)
             if exit_code is not None:
                 return exit_code
 
         compiler_path, compiler_pkg, args = get_compiler_path()
-        
+
         if compiler_pkg.is_disabled():
-            return compiler_pkg._invoke_real_compiler(compiler_path, args, disable_auto_rsp=True)
+            return compiler_pkg._invoke_real_compiler(
+                compiler_path, args, disable_auto_rsp=True
+            )
 
         return compiler_pkg.process_compile_request(cache, compiler_path, args)
 
@@ -53,11 +53,19 @@ if __name__ == "__main__":
     except Exception as e:
         # Log exception with full traceback
         import traceback
-        log("Exception: {!s}".format(
-            traceback.format_exc()), level=LogLevel.ERROR, force_flush=True)
+
+        log(
+            "Exception: {!s}".format(traceback.format_exc()),
+            level=LogLevel.ERROR,
+            force_flush=True,
+        )
 
         # Fall back to original compiler
         compiler_path, compiler_pkg, args = get_compiler_path()
-        sys.exit(compiler_pkg._invoke_real_compiler(compiler_path, args, disable_auto_rsp=True))
+        sys.exit(
+            compiler_pkg._invoke_real_compiler(
+                compiler_path, args, disable_auto_rsp=True
+            )
+        )
     finally:
         flush_logger()

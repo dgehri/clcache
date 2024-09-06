@@ -1,11 +1,11 @@
 from setuptools import setup, find_packages
 
 setup(
-    name="clcache-lib",
-    version="4.4.28",
+    name="clcachelib",
+    version="4.4.30",
     author="Various",
     author_email="Various",
-    packages=find_packages(exclude=('clcache_lib',)),
+    packages=find_packages(exclude=('clcachelib',)),
     scripts=[],
     url="https://github.com/dgehri/clcache",
     license="LICENSE.txt",
