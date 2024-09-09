@@ -8,6 +8,7 @@
 #
 import os
 import sys
+from pathlib import Path
 
 lib_path = os.path.join(os.path.abspath(os.path.dirname(__file__)), "clcachelib")
 sys.path.insert(0, lib_path)
@@ -18,7 +19,7 @@ from clcachelib.utils.util import get_build_dir
 from clcachelib.cache.cache import Cache
 
 
-def main() -> int:
+def main(build_dir: Path) -> int:
     if "CLCACHE_ACCESS_VIOLATION" in os.environ:
         log("Recovering from access violation", LogLevel.ERROR)
 
@@ -30,7 +31,7 @@ def main() -> int:
             if exit_code is not None:
                 return exit_code
 
-        compiler_path, compiler_pkg, args = get_compiler_path()
+        compiler_path, compiler_pkg, args = get_compiler_path(build_dir)
 
         if compiler_pkg.is_disabled():
             return compiler_pkg._invoke_real_compiler(
@@ -41,15 +42,15 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    try:
-        # get build folder
-        build_dir = get_build_dir()
+    # get build folder
+    build_dir = get_build_dir()
 
+    try:
         # initialize logger if environment variable is set
         if "CLCACHE_DISABLE_LOGGING" not in os.environ:
             init_logger(build_dir)
 
-        sys.exit(main())
+        sys.exit(main(build_dir))
     except Exception as e:
         # Log exception with full traceback
         import traceback
@@ -61,7 +62,7 @@ if __name__ == "__main__":
         )
 
         # Fall back to original compiler
-        compiler_path, compiler_pkg, args = get_compiler_path()
+        compiler_path, compiler_pkg, args = get_compiler_path(build_dir)
         sys.exit(
             compiler_pkg._invoke_real_compiler(
                 compiler_path, args, disable_auto_rsp=True

@@ -19,12 +19,11 @@ from clcachelib.utils.logging import log
 
 
 def parse_args() -> argparse.Namespace | None:
-    '''
+    """
     Parse the command line arguments
-    '''
+    """
 
-    parser = argparse.ArgumentParser(
-        description=f"clcache.py v{VERSION}")
+    parser = argparse.ArgumentParser(description=f"clcache.py v{VERSION}")
 
     # Handle the clcache standalone actions, only one can be used at a time
     cmd_group = parser.add_mutually_exclusive_group()
@@ -77,7 +76,7 @@ def parse_args() -> argparse.Namespace | None:
         type=str,
         default=None,
         nargs="?",
-        help="Optional path to compiler executable."
+        help="Optional path to compiler executable.",
     )
 
     # Add remaining arguments
@@ -86,7 +85,7 @@ def parse_args() -> argparse.Namespace | None:
         type=str,
         default=None,
         nargs=argparse.REMAINDER,
-        help="Optional arguments for the compiler executable."
+        help="Optional arguments for the compiler executable.",
     )
 
     if len(sys.argv) == 1:
@@ -116,8 +115,12 @@ def _find_compiler_binary() -> Path | None:
 
 def handle_clcache_options(clcache_options: argparse.Namespace, cache) -> int | None:
     # sourcery skip: extract-duplicate-method
-    from clcachelib.cache.cache import (clean_cache, clear_cache,
-                                         print_statistics, reset_stats)
+    from clcachelib.cache.cache import (
+        clean_cache,
+        clear_cache,
+        print_statistics,
+        reset_stats,
+    )
 
     if clcache_options.show_stats:
         print_statistics(cache)
@@ -143,8 +146,7 @@ def handle_clcache_options(clcache_options: argparse.Namespace, cache) -> int | 
     if clcache_options.cache_size_gb is not None:
         max_size_value = clcache_options.cache_size_gb * 1024 * 1024 * 1024
         if max_size_value < 1:
-            print("Max size argument must be greater than 0.",
-                  file=sys.stderr)
+            print("Max size argument must be greater than 0.", file=sys.stderr)
             return 1
 
         cache.configuration.set_max_cache_size(max_size_value)
@@ -155,8 +157,7 @@ def handle_clcache_options(clcache_options: argparse.Namespace, cache) -> int | 
     if clcache_options.cache_size is not None:
         max_size_value = clcache_options.cache_size
         if max_size_value < 1:
-            print("Max size argument must be greater than 0.",
-                  file=sys.stderr)
+            print("Max size argument must be greater than 0.", file=sys.stderr)
             return 1
 
         cache.configuration.set_max_cache_size(max_size_value)
@@ -165,25 +166,21 @@ def handle_clcache_options(clcache_options: argparse.Namespace, cache) -> int | 
         return 0
 
 
-def _get_compiler_path_from_moccache_config() -> Path | None:
-    '''
+def _get_compiler_path_from_moccache_config(moccache_json: Path) -> Path | None:
+    """
     Get the compiler path from the moccache_config.json file
-    '''
-    for path in [Path.cwd()] + list(Path.cwd().parents):
-        if (path / "CMakeCache.txt").exists():
-            moccache_json = path / "moccache_config.json"
-            # test if exists and is readable
-            if moccache_json.exists() and moccache_json.is_file():
-                # read compiler path from moccache.json
-                import json
-                with open(moccache_json) as f:
-                    config = json.load(f)
-                    return Path(config["moc_path"])
-            return
-        path = path.parent
+    """
+    if moccache_json.is_file():
+        # read compiler path from moccache.json
+        import json
+
+        with open(moccache_json) as f:
+            config = json.load(f)
+            return Path(config["moc_path"])
+    return None
 
 
-def get_compiler_path() -> tuple[Path, ModuleType, list[str]]:
+def get_compiler_path(build_dir: Path) -> tuple[Path, ModuleType, list[str]]:
 
     # Clone arguments from sys.argv
     args = sys.argv[1:].copy()
@@ -208,21 +205,24 @@ def get_compiler_path() -> tuple[Path, ModuleType, list[str]]:
         identity = "moccache"
 
     if identity == "clcache":
-        compiler_pkg = __import__(
-            "clcachelib.cl.compiler", fromlist=["compiler"])
+        compiler_pkg = __import__("clcachelib.cl.compiler", fromlist=["compiler"])
+
+        # parse the config file
+        _read_config_file(build_dir, "clcache_config.json")
 
         if compiler_path is None:
             compiler_path = _find_compiler_binary()
 
     elif identity == "moccache":
-        compiler_pkg = __import__(
-            "clcachelib.moc.compiler", fromlist=["compiler"])
+        compiler_pkg = __import__("clcachelib.moc.compiler", fromlist=["compiler"])
 
-        if compiler_path is None:
-            compiler_path = _get_compiler_path_from_moccache_config()
+        # parse the config file
+        if moccache_config := _read_config_file(build_dir, "moccache_config.json"):
+            if compiler_path is None:
+                compiler_path = _get_compiler_path_from_moccache_config(moccache_config)
+
     else:
-        raise LogicException(
-            f"Unknown compiler identity: {identity!s}")
+        raise LogicException(f"Unknown compiler identity: {identity!s}")
 
     if not (compiler_path and compiler_path.exists()):
         raise LogicException(
@@ -231,3 +231,26 @@ def get_compiler_path() -> tuple[Path, ModuleType, list[str]]:
 
     log(f"Compiler binary: {compiler_path}")
     return compiler_path, compiler_pkg, args
+
+
+def _read_config_file(build_dir: Path, file_name: str) -> Path | None:
+    """
+    Read the config file (clcache_config.json or moccache_config.json) and parse environment entries
+
+    Returns:
+        Path to config file, or None if not found
+    """
+
+    config_json = build_dir / file_name
+    # test if exists and is readable
+    if not config_json.is_file():
+        return None
+    
+    import json
+    with open(config_json) as f:
+        config = json.load(f)
+
+        # Iterate over "env" key containing dictionary of environment variables
+        for key, value in config.get("env", {}).items():
+            os.environ[key] = value
+    return config_json
