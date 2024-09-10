@@ -31,17 +31,21 @@ $MainFunction = {
         --report=clcache.dist\report.xml `
         .\clcache
 
+    # Test run the compiled executable and check the exit code
+    $exitCode = .\clcache.dist\clcache.exe
+    if ($exitCode -ne 0) {
+        Write-Error "The compiled executable returned a non-zero exit code: $exitCode"
+        exit 1
+    }
+
     Push-Location conan
     $env:CONAN_REVISIONS_ENABLED = 1
-
-    # Export Conan package (if this fails, ensure you have conan 1.x)
-    conan export-pkg conanfile.py --force
-
+    
     if ($upload -eq "y") {
-        # Upload Conan package
+        conan remote add globus-conan-local https://conan-us.globusmedical.com/artifactory/api/conan/globus-conan-local
+        conan user -p -r globus-conan-local admin
+        conan export-pkg conanfile.py --force
         conan upload "$name/$version@$user/$channel" --all -r globus-conan-local
-    } else {
-        Write-Output "Skipping upload. -- if you change your mind, run: conan upload $name/$version@$user/$channel --all -r globus-conan-local"
     }
     
     Pop-Location

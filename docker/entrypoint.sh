@@ -15,6 +15,15 @@ get_package_info() {
 
 # Main function
 main() {
+    # Ask if the user wants to upload the Conan package
+    read -p "Do you want to upload the Conan package? (y/n): " upload
+    if [ "$upload" == "y" ]; then
+        echo "Conan package will be uploaded."
+    else
+        echo "Conan package will not be uploaded."
+    fi
+
+
     # Get package info
     get_package_info
 
@@ -28,11 +37,6 @@ main() {
     pushd "$srcPath/clcache/clcachelib" > /dev/null
     wine pip install . || exit 1
     popd > /dev/null
-
-    # # Locate DependsExe.py below the .virtualenvs directory and patch it
-    # dependsExePath=$(find /opt/wineprefix/drive_c/users/root/.virtualenvs -name DependsExe.py)
-    # patchPath=/src/docker/DependsExe.patch
-    # patch "$dependsExePath" "$patchPath" || exit 1
 
     # Get Nuitka version and display it
     nuitkaVersion=$(wine python -m nuitka --version)
@@ -51,18 +55,21 @@ main() {
         --python-flag="-O" \
         --mingw64 clcache; \
         wineserver -w &&
+    
     popd > /dev/null
 
     # Export Conan package
     pushd "$srcPath/conan" > /dev/null
     export CONAN_REVISIONS_ENABLED=1
-    wine conan export-pkg conanfile.py --force
 
     # Upload Conan package if confirmed by the user
     if [ "$upload" == "y" ]; then
+        wine conan remote add globus-conan-local https://conan-us.globusmedical.com/artifactory/api/conan/globus-conan-local
+        wine conan user -p -r globus-conan-local admin
+        wine conan export-pkg conanfile.py --force
         wine conan upload "$name/$version@$user/$channel" --all -r globus-conan-local
     else
-        echo "Skipping upload. -- if you change your mind, run: wine conan upload $name/$version@$user/$channel --all -r globus-conan-local"
+        echo "Conan package not uploaded."
     fi
 
     popd > /dev/null

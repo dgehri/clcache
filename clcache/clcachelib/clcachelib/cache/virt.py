@@ -626,23 +626,38 @@ def _canonicalize_toolchain_dirs(path_str: str) -> str | None:
                 suffix = "."
 
             if value := os.environ.get(var):
-                long_path = os.path.realpath(
-                    os.path.normpath(os.path.join(value, suffix))
-                ).lower()
-                short_path = str(get_short_path_name(Path(long_path))).lower()
-                if short_path != long_path:
-                    _canonicalize_toolchain_dirs.values.append(
-                        (name, long_path, short_path)
-                    )
-                else:
-                    _canonicalize_toolchain_dirs.values.append((name, long_path, None))
+                orig_path = os.path.normpath(os.path.join(value, suffix)).lower()
+                orig_short_path = str(get_short_path_name(Path(orig_path))).lower()
+                if orig_short_path == orig_path:
+                    orig_short_path = None
 
-    for var, long_path, short_path in _canonicalize_toolchain_dirs.values:
-        if short_path and path_str.startswith(short_path + os.path.sep):
-            # convert short path to long path
-            path_str = os.path.realpath(path_str)
-        if path_str.startswith(long_path + os.path.sep):
-            return path_str.replace(long_path, f"<env:{var}>", 1)
+                real_long_path = os.path.realpath(orig_path).lower()
+                real_short_path = str(get_short_path_name(Path(real_long_path))).lower()
+                if (
+                    real_short_path == real_long_path
+                    or real_short_path != orig_short_path
+                ):
+                    real_short_path = None
+
+                if orig_path != real_long_path:
+                    real_long_path = None
+
+                _canonicalize_toolchain_dirs.values.append(
+                    (
+                        name,
+                        (real_long_path, real_short_path, orig_path, orig_short_path),
+                    )
+                )
+
+    for var, paths in _canonicalize_toolchain_dirs.values:
+        for path_prefix in paths:
+            if not path_prefix:
+                continue
+
+            if path_str.startswith(path_prefix + os.path.sep):
+                return path_str.replace(path_prefix, f"<env:{var}>", 1)
+
+    return None
 
 
 _canonicalize_toolchain_dirs.values = None
