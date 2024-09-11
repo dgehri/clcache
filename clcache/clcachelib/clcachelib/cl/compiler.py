@@ -789,6 +789,7 @@ def _get_manifest_hash(
     toolset_data = "{}|{}|{}".format(
         compiler_hash, cmd_line, ManifestRepository.MANIFEST_FILE_CL_FORMAT_VERSION
     )
+    log(f"Toolset hash data: {toolset_data}", LogLevel.TRACE)
     return get_file_hash(src_file, toolset_data)
 
 

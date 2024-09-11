@@ -211,14 +211,14 @@ def get_file_hash(path: Path, toolset_data: str | None = None) -> str:
             src_content = subst_basedir_with_placeholder(f.read(), src_dir)
             hasher.update(src_content)
 
-    # log(f"File hash: {path.as_posix()} => {hasher.hexdigest()}", 2)
+    log(f"File hash: {path.as_posix()} => {hasher.hexdigest()}", LogLevel.TRACE)
 
     if toolset_data is not None:
         # Encoding of this additional data does not really matter
         # as long as we keep it fixed, otherwise hashes change.
         # The string should fit into ASCII, so UTF8 should not change anything
         hasher.update(toolset_data.encode("UTF-8"))
-        # log(f"AdditionalData Hash: {hasher.hexdigest()}: {toolset_data}", 2)
+        log(f"AdditionalData Hash: {hasher.hexdigest()}: {toolset_data}", LogLevel.TRACE)
 
     return hasher.hexdigest()
 

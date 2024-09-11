@@ -65,7 +65,12 @@ main() {
     # Upload Conan package if confirmed by the user
     if [ "$upload" == "y" ]; then
         wine conan remote add globus-conan-local https://conan-us.globusmedical.com/artifactory/api/conan/globus-conan-local
-        wine conan user -p -r globus-conan-local admin
+        # if CONAN_TOKEN is set, use it to authenticate
+        if [ -n "$CONAN_TOKEN" ]; then
+            wine conan user -p "$CONAN_TOKEN" -r globus-conan-local admin
+        else
+            wine conan user -p -r globus-conan-local admin
+        fi
         wine conan export-pkg conanfile.py --force
         wine conan upload "$name/$version@$user/$channel" --all -r globus-conan-local
     else
